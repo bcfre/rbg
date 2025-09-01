@@ -26,7 +26,6 @@ go.work
 *.swo
 *~
 .devcontainer
-.github
 **/*.tgz
 **/.DS_Store
 
