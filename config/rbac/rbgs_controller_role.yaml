@@ -18,7 +18,6 @@ rules:
       - workloads.x-k8s.io
     resources:
       - rolebasedgroupsets
-      - rolebasedgroups
       - clusterengineruntimeprofiles
     verbs:
       - get
@@ -29,6 +28,7 @@ rules:
   - apiGroups:
       - workloads.x-k8s.io
     resources:
+      - rolebasedgroups
       - rolebasedgroupscalingadapters
     verbs:
       - get

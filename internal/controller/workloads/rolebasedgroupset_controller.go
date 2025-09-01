@@ -19,6 +19,10 @@ package workloads
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strconv"
+	"sync"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,7 +32,6 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
-	"reflect"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -36,8 +39,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	workloadsv1alpha1 "sigs.k8s.io/rbgs/api/workloads/v1alpha1"
 	"sigs.k8s.io/rbgs/pkg/utils"
-	"strconv"
-	"sync"
 )
 
 // RoleBasedGroupSetReconciler reconciles a RoleBasedGroupSet object

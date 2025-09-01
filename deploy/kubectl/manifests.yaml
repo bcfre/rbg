@@ -12911,7 +12911,12 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+    - description: desired replicas
+      jsonPath: .status.replicas
+      name: DESIRED
+      type: string
+    - description: ready replicas
+      jsonPath: .status.readyReplicas
       name: READY
       type: string
     - jsonPath: .metadata.creationTimestamp
@@ -21662,6 +21667,9 @@ spec:
                 description: The generation observed by the deployment controller.
                 format: int64
                 type: integer
+              readyReplicas:
+                format: int32
+                type: integer
               replicas:
                 format: int32
                 type: integer
@@ -21670,6 +21678,9 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}
 ---
 apiVersion: v1

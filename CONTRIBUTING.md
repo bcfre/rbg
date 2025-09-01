@@ -93,7 +93,7 @@ We assume you already have a GitHub account.
     git checkout -b <new-branch>
     ```
 
-    Make changes in the `<new-branch>`. For more about RBG development, please see the [Developer Guide](doc/dev/how_to_develop.md) (if available).
+    Make changes in the `<new-branch>`. For more about RBG development, please see the [Developer Guide](doc/dev/how_to_develop.md)
 
 ---
 

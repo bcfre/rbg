@@ -13,6 +13,8 @@ kubectl apply --server-side -f ./deploy/kubectl/manifests.yaml
 ```
 To wait for RoleBasedGroup controller to be fully available, run:
 
+todo: fix deploy name
+
 ```bash
 kubectl wait deploy/rbgs-controller-manager -n rbgs-system --for=condition=available --timeout=5m
 ```
