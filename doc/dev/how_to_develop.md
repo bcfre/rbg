@@ -4,8 +4,8 @@
 
 - Git
 - Golang (version >= 1.24.1)
-- Docker (version >= 19.03)
 - Kubernetes (version >= 1.26)
+- Docker or other container runtime
 - GNU Make
 
 For installation of Golang, please refer to [Install Golang](https://golang.org/dl/)
@@ -53,6 +53,15 @@ We assume you already have a GitHub account.
     ```shell
     git checkout -b <new-branch>
     ```
+
+### Update Generated Code
+When your modification involves the CRD API definition, you need to update the generated code
+```shell
+# Generate WebhookConfiguration, CustomResourceDefinition objects.
+$ make manifests
+# enerate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+$ make generate
+```
 
 ### Build Binary
 `Makefile` under project directory provides many tasks you may want to use including Test, Build, Debug, Deploy etc.
@@ -103,7 +112,7 @@ In the following steps, we assume you have properly configured `KUBECONFIG` envi
 
 1. Push your images to a image registry accessible to your Kubernetes cluster
 
-    If your images are pushed to some private repositories, make sure your Kubernetes cluster hold credentials for accessing those repositories. You can add image pull credentials in  [controller deploy](config/manager/manager.yaml)
+    If your images are pushed to some private repositories, make sure your Kubernetes cluster hold credentials for accessing those repositories. You can add image pull credentials in  [controller deploy](../../config/manager/manager.yaml)
     ```yaml
     spec:
       template:
@@ -197,74 +206,72 @@ Execute following command from project root to run integration tests:
 $ make test-e2e
 ```
 
-### Running RGB Controller Components Locally
-The Fluid controller component supports local operation or debugging. The Fluid controller components include Dataset Controller, various runtime controllers, and Application Controller. Before running the controller component locally, it is necessary to configure kubeconfig in advance in the local environment (configured through the `KUBECONFIG` environment variable or through the `$HOME/.kube/config` file) and be able to access a Kubernetes cluster normally.
+### Running RGB Controller Locally
+The RGB controller component supports local operation or debugging. Before running the controller component locally, it is necessary to configure kubeconfig in advance in the local environment (configured through the `KUBECONFIG` environment variable or through the `$HOME/.kube/config` file) and be able to access a Kubernetes cluster normally.
 
-> The Fluid CSI plugin cannot run locally to interact with the Kubernetes cluster. To run such components, it is necessary to first perform image construction, manually replace the corresponding image address of `charts/fluid/fluid/values.yaml`, and then deploy it to the Kubernetes cluster.
+1. Install CRDs
+    ```shell
+    $ make install
+    ```
+    
+    Check CRD with:
+    
+    ```shell
+    $ kubectl get crd | grep -e rolebasedgroup -e clusterengineruntimeprofiles
+    clusterengineruntimeprofiles.workloads.x-k8s.io                  2025-09-01T09:22:57Z
+    rolebasedgroups.workloads.x-k8s.io                               2025-09-01T09:22:58Z
+    rolebasedgroupscalingadapters.workloads.x-k8s.io                 2025-09-01T09:22:58Z
+    rolebasedgroupsets.workloads.x-k8s.io                            2025-09-01T09:22:58Z
+    ```
 
-The runtime controller depends on [`heml`](https://helm.sh/). And related Helm Charts to function properly. Therefore, before running the Runtime Controller, execute the following command to configure the environment:
+2. Build binary:
+    ```shell
+    # build controller binary
+    # Open the development debugging mode, configure health-probe-bind-address
 
-1. Create a soft link for the helm command locally
-```
-$ ln -s $(which helm) /usr/local/bin/ddc-helm
-```
+    $ make build
+    ```
 
-2. Create a soft link directory for related Charts locally
-```
-$ ln -s $GOPATH/src/github.com/fluid-cloudnative/fluid/charts $HOME/charts
-```
+    By default, the binary would be put under `<rbg-path>/bin/`, and the default executable file name is manager.
 
-3. Taking the Alluxio Runtime Controller as an example, run the component locally using the following command：
-```
-# Configure environment variable parameters related to AlluxioRuntime
-$ export ALLUXIO_RUNTIME_IMAGE_ENV="alluxio/alluxio-dev:2.9.0"
-$ export ALLUXIO_FUSE_IMAGE_ENV="alluxio/alluxio-dev:2.9.0"
-$ export DEFAULT_INIT_IMAGE_ENV="fluidcloudnative/init-users:v0.8.0-5bb4677"
-$ export MOUNT_ROOT="/runtime-mnt"
-$ export HOME="$HOME"
+3. Run Controller:
 
-# Open the development debugging mode, open leader-election, and start alluxioruntime-controller
-$ ./bin/alluxioruntime-controller start --development=true --enable-leader-election
-```
+    ```shell
+    # Open the development debugging mode, configure health-probe-bind-address
+    $ ./bin/manager --development=true --health-probe-bind-address=:8082
+    ```
 
-### Debugging Fluid Components
+### Debugging RGB Controller
 
-The Fluid controller component supports local operation or debugging. The Fluid controller components include Dataset Controller, various runtime controllers, and Application Controller. Before running the controller component locally, it is necessary to configure kubeconfig in advance in the local environment (configured through the `KUBECONFIG` environment variable or through the `$HOME/.kube/config` file) and be able to access a Kubernetes cluster normally.
-
-> The Fluid CSI plugin cannot run locally to interact with the Kubernetes cluster. To run such components, it is necessary to first perform image construction, manually replace the corresponding image address of `charts/fluid/fluid/values.yaml`, and then deploy it to the Kubernetes cluster.
+The RBG controller component supports local operation or debugging. Before running the controller component locally, it is necessary to configure kubeconfig in advance in the local environment (configured through the `KUBECONFIG` environment variable or through the `$HOME/.kube/config` file) and be able to access a Kubernetes cluster normally.
 
 #### Debugging with Local Command Line
 
 Ensure that go help is installed in the environment, and refer to the [go installation manual](https://github.com/go-delve/delve/tree/master/Documentation/installation) for the specific installation process
 
 ```shell
-$ dlv debug cmd/alluxio/main.go
+$ dlv debug cmd/rbgs/main.go
 ```
 
 #### Debugging with VSCode Locally
 If VSCode is used as the development environment, the [Go plugin](https://marketplace.visualstudio.com/items?itemName=golang.go) of VSCode can be directly installed and conduct local debugging.
 
 ##### Debugging Controller Components
-Taking debugging the Alluxio Runtime Controller as an example, the Go code debugging task is defined in `./.vscode/launch.json` as follows:
+The Go code debugging task is defined in `./.vscode/launch.json` as follows:
 
 ```json
 {
     "version": "0.2.0",
     "configurations": [
        {
-            "name": "Alluxio Runtime Controller",
+            "name": "RBG Controller",
             "type": "go",
             "request": "launch",
             "mode": "debug",
-            "program": "cmd/alluxio/main.go",
-            "args": ["start", "--development=true", "--enable-leader-election"],
+            "program": "cmd/rbgs/main.go",
+            "args": ["start", "--development=true", "--health-probe-bind-address=:8082"],
             "env": {
-                "KUBECONFIG": "<path>/<to>/<kubeconfig>",
-                "ALLUXIO_RUNTIME_IMAGE_ENV": "alluxio/alluxio-dev:2.9.0",
-                "ALLUXIO_FUSE_IMAGE_ENV": "alluxio/alluxio-dev:2.9.0",
-                "DEFAULT_INIT_IMAGE_ENV": "fluidcloudnative/init-users:v0.8.0-5bb4677",
-                "MOUNT_ROOT": "/runtime-mnt",
-                "HOME": "<HOME_PATH>"
+                // "KUBECONFIG": "<path>/<to>/<kubeconfig>"
             }
         },
     ]
@@ -272,13 +279,13 @@ Taking debugging the Alluxio Runtime Controller as an example, the Go code debug
 ```
 
 #### Remote Debugging
-For components such as Fluid Webhook and Fluid CSI plugins, remote debugging is usually the more commonly used method. Please ensure that go help is correctly installed on both the local machine and component images.
+Please ensure that go help is correctly installed on both the local machine and component images.
 
 
 On remote host:
 
 ```shell
-$ dlv debug --headless --listen ":12345" --log --api-version=2 cmd/alluxio/main.go
+$ dlv debug --headless --listen ":12345" --log --api-version=2 cmd/rbgs/main.go
 ```
 
 
