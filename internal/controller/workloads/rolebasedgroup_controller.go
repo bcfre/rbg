@@ -95,6 +95,24 @@ func (r *RoleBasedGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	ctx = ctrl.LoggerInto(ctx, logger)
 	logger.Info("Start reconciling")
 
+	currentRevision, err := r.getOrCreateRevisionIfNotExist(ctx, rbg)
+	if err != nil {
+		r.recorder.Event(rbg, corev1.EventTypeWarning, FailedCreateRevision, "Failed to create revision")
+		return ctrl.Result{}, err
+	}
+	expectedRevision, err := utils.NewRevision(ctx, r.client, rbg)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !utils.EqualRevision(currentRevision, expectedRevision) {
+		logger.Info("Current revision need to be updated")
+		if err := r.client.Create(ctx, expectedRevision); err != nil {
+			return ctrl.Result{}, err
+		} else {
+			r.recorder.Event(rbg, corev1.EventTypeNormal, SucceedCreateRevision, "Create revision for RoleBasedGroup")
+		}
+	}
+
 	// Process roles in dependency order
 	dependencyManager := dependency.NewDefaultDependencyManager(r.scheme, r.client)
 	sortedRoles, err := dependencyManager.SortRoles(ctx, rbg)
@@ -153,7 +171,7 @@ func (r *RoleBasedGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, err
 		}
 
-		if err := reconciler.Reconciler(roleCtx, rbg, role); err != nil {
+		if err := reconciler.Reconciler(roleCtx, rbg, role, currentRevision, expectedRevision); err != nil {
 			r.recorder.Eventf(rbg, corev1.EventTypeWarning, FailedReconcileWorkload,
 				"Failed to reconcile role %s: %v", role.Name, err)
 			return ctrl.Result{}, err
@@ -329,6 +347,31 @@ func (r *RoleBasedGroupReconciler) ReconcileScalingAdapter(ctx context.Context, 
 	}
 
 	return r.client.Create(ctx, rbgScalingAdapter)
+}
+
+func (r *RoleBasedGroupReconciler) getOrCreateRevisionIfNotExist(ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup) (*appsv1.ControllerRevision, error) {
+	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
+		MatchLabels: map[string]string{
+			workloadsv1alpha1.SetNameLabelKey: rbg.Name,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	revisions, err := utils.ListRevisions(ctx, r.client, rbg, selector)
+	if err != nil {
+		return nil, err
+	}
+	revision := utils.GetHighestRevision(revisions)
+	if revision != nil {
+		return revision, nil
+	}
+	revision, err = utils.NewRevision(ctx, r.client, rbg)
+	err = r.client.Create(ctx, revision)
+	if err == nil {
+		r.recorder.Event(rbg, corev1.EventTypeNormal, SucceedCreateRevision, "Create revision for RoleBasedGroup")
+	}
+	return revision, err
 }
 
 func (r *RoleBasedGroupReconciler) CleanupOrphanedScalingAdapters(ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup) error {

@@ -10,6 +10,7 @@ import (
 
 	"k8s.io/utils/ptr"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,11 +40,11 @@ func NewLeaderWorkerSetReconciler(scheme *runtime.Scheme, client client.Client) 
 
 func (r *LeaderWorkerSetReconciler) Reconciler(
 	ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec,
-) error {
+	currentRevision, updatedRevision *appsv1.ControllerRevision) error {
 	logger := log.FromContext(ctx)
 	logger.V(1).Info("start to reconciling lws workload")
 
-	lwsApplyConfig, err := r.constructLWSApplyConfiguration(ctx, rbg, role)
+	lwsApplyConfig, err := r.constructLWSApplyConfiguration(ctx, rbg, role, updatedRevision)
 	if err != nil {
 		return err
 	}
@@ -64,13 +65,21 @@ func (r *LeaderWorkerSetReconciler) Reconciler(
 		return err
 	}
 
-	equal, err := semanticallyEqualLeaderWorkerSet(oldLWS, newLWS, false)
-	if equal {
-		logger.Info("lws equal, skip reconcile")
-		return nil
-	}
+	semanticallyEqual, err := semanticallyEqualLeaderWorkerSet(oldLWS, newLWS, false)
 	if err != nil {
 		logger.Info(fmt.Sprintf("lws not equal, diff: %s", err.Error()))
+	}
+	// if semanticallyEqual {
+	// 	logger.Info("lws equal, skip reconcile")
+	// 	return nil
+	// }
+	hashEqual := newLWS.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)] == oldLWS.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)]
+	if !hashEqual {
+		logger.Info(fmt.Sprintf("lws hash not equal, old: %s, new: %s", oldLWS.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)], newLWS.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)]))
+	}
+	if semanticallyEqual && hashEqual {
+		logger.Info("lws equal, skip reconcile")
+		return nil
 	}
 
 	if err = utils.PatchObjectApplyConfiguration(ctx, r.client, lwsApplyConfig, utils.PatchSpec); err != nil {
@@ -169,6 +178,7 @@ func (r *LeaderWorkerSetReconciler) constructLWSApplyConfiguration(
 	ctx context.Context,
 	rbg *workloadsv1alpha1.RoleBasedGroup,
 	role *workloadsv1alpha1.RoleSpec,
+	updatedRevision *appsv1.ControllerRevision,
 ) (*lwsapplyv1.LeaderWorkerSetApplyConfiguration, error) {
 	logger := log.FromContext(ctx)
 	// leaderTemplate
@@ -240,11 +250,14 @@ func (r *LeaderWorkerSetReconciler) constructLWSApplyConfiguration(
 		)
 	}
 
+	lwsLabel := rbg.GetCommonLabelsFromRole(role)
+	lwsLabel[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)] = updatedRevision.ObjectMeta.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role)]
+
 	// construct lws apply configuration
 	lwsConfig := lwsapplyv1.LeaderWorkerSet(rbg.GetWorkloadName(role), rbg.Namespace).
 		WithSpec(lwsSpecConfig).
 		WithAnnotations(rbg.GetCommonAnnotationsFromRole(role)).
-		WithLabels(rbg.GetCommonLabelsFromRole(role)).
+		WithLabels(lwsLabel).
 		WithOwnerReferences(
 			metaapplyv1.OwnerReference().
 				WithAPIVersion(rbg.APIVersion).
