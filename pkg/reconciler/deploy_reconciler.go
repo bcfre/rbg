@@ -36,7 +36,7 @@ func NewDeploymentReconciler(scheme *runtime.Scheme, client client.Client) *Depl
 
 func (r *DeploymentReconciler) Reconciler(
 	ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec,
-) error {
+	currentRevision, updatedRevision *appsv1.ControllerRevision) error {
 	logger := log.FromContext(ctx)
 	logger.V(1).Info("start to reconciling deployment workload")
 

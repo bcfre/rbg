@@ -14,7 +14,7 @@ import (
 )
 
 type WorkloadReconciler interface {
-	Reconciler(ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec) error
+	Reconciler(ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec, currentRevision, updatedRevision *appsv1.ControllerRevision) error
 	ConstructRoleStatus(
 		ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec,
 	) (workloadsv1alpha1.RoleStatus, bool, error)

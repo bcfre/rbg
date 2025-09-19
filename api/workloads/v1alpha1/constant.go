@@ -29,6 +29,9 @@ const (
 	// to skip exclusive-topology affinity injection for that role.
 	DisableExclusiveKeyAnnotationKey = RBGPrefix + "disable-exclusive-topology"
 
+	RevisionKey        = RBGPrefix + "controller-revision-hash"
+	RoleRevisionKeyFmt = RBGPrefix + "role-revision-hash-%s"
+
 	// PodGroupLabelKey identifies pods belonging to a specific pod group
 	// Value: RoleBasedName
 	PodGroupLabelKey = "pod-group.scheduling.sigs.k8s.io/name"

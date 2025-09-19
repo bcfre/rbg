@@ -43,7 +43,7 @@ func NewStatefulSetReconciler(scheme *runtime.Scheme, client client.Client) *Sta
 
 func (r *StatefulSetReconciler) Reconciler(
 	ctx context.Context, rbg *workloadsv1alpha1.RoleBasedGroup, role *workloadsv1alpha1.RoleSpec,
-) error {
+	currentRevision, updatedRevision *appsv1.ControllerRevision) error {
 	if err := r.reconcileStatefulSet(ctx, rbg, role); err != nil {
 		return err
 	}
