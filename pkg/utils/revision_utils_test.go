@@ -2,15 +2,19 @@ package utils
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	workloadsv1alpha1 "sigs.k8s.io/rbgs/api/workloads/v1alpha1"
 )
 
 func TestListRevisions(t *testing.T) {
@@ -397,4 +401,72 @@ func TestListRevisionsAndFindHighestIntegration(t *testing.T) {
 	assert.NotNil(t, highest)
 	assert.Equal(t, int64(3), highest.Revision)
 	assert.Equal(t, "revision-3", highest.Name)
+}
+
+func TestGetPatchAndRestore(t *testing.T) {
+	v1 := &workloadsv1alpha1.RoleBasedGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "role-lws",
+		},
+		Spec: workloadsv1alpha1.RoleBasedGroupSpec{
+			Roles: []workloadsv1alpha1.RoleSpec{
+				{
+					Name:     "role-sts",
+					Replicas: ptr.To(int32(1)),
+					Workload: workloadsv1alpha1.WorkloadSpec{
+						APIVersion: "apps/v1",
+						Kind:       "StatefulSet",
+					},
+					Template: v1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{
+							Labels: map[string]string{
+								"app": "nginx",
+							},
+						},
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:  "nginx",
+									Image: "1.0.0",
+								},
+							},
+						},
+					},
+				},
+				{
+					Name:     "role-lws",
+					Replicas: ptr.To(int32(1)),
+					Workload: workloadsv1alpha1.WorkloadSpec{
+						APIVersion: "leaderworkerset.x-k8s.io/v1",
+						Kind:       "LeaderWorkerSet",
+					},
+				},
+			},
+			PodGroupPolicy: &workloadsv1alpha1.PodGroupPolicy{
+				PodGroupPolicySource: workloadsv1alpha1.PodGroupPolicySource{
+					KubeScheduling: &workloadsv1alpha1.KubeSchedulingPodGroupPolicySource{
+						ScheduleTimeoutSeconds: ptr.To(int32(300)),
+					},
+				},
+			},
+		},
+	}
+	patchV1, _ := getRBGPatch(v1)
+
+	v2 := v1.DeepCopy()
+	v2.Spec.Roles[0].Replicas = ptr.To(int32(2))
+
+	patchV1ControllerRevision := &appsv1.ControllerRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-rbg-v1",
+		},
+		Data: runtime.RawExtension{
+			Raw: patchV1,
+		},
+	}
+	restoreV1, _ := ApplyRevision(v2, patchV1ControllerRevision)
+	fmt.Println(string(patchV1))
+	assert.Equal(t, v1.Spec.Roles[0].Replicas, restoreV1.Spec.Roles[0].Replicas)
+	assert.True(t, reflect.DeepEqual(v1.Spec.PodGroupPolicy, restoreV1.Spec.PodGroupPolicy))
+	assert.True(t, reflect.DeepEqual(v1.Spec.Roles, restoreV1.Spec.Roles))
 }

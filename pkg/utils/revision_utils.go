@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"sort"
 
 	"github.com/davecgh/go-spew/spew"
 	appsv1 "k8s.io/api/apps/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
+
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -62,27 +66,61 @@ func GetHighestRevision(revisions []*appsv1.ControllerRevision) *appsv1.Controll
 	return maxRevision
 }
 
-// func GetRBGRevision(ctx context.Context, k8sClient client.Client, rbg *workloadsv1alpha1.RoleBasedGroup) (*appsv1.ControllerRevision, error) {
-// 	logger := log.FromContext(ctx)
-
-// 	for _, revision := range revisions {
-// 		if revision.Labels[RevisionKey] == revisionHash {
-// 			return revision
-// 		}
-// 	}
-// 	return nil
-// }
-
-//	func GetOrCreateRGBRevisions(ctx context.Context, client client.Client, rbg *workloadsv1alpha1.RoleBasedGroup) (*appsv1.ControllerRevision, error) {
-//		var
-//	}
-
 func EqualRevision(lhs, rhs *appsv1.ControllerRevision) bool {
 	if lhs == nil || rhs == nil {
 		return lhs == rhs
 	}
 
 	return bytes.Equal(lhs.Data.Raw, rhs.Data.Raw) && apiequality.Semantic.DeepEqual(lhs.Data.Object, rhs.Data.Object)
+}
+
+func ApplyRevision(rbg *workloadsv1alpha1.RoleBasedGroup, revision *appsv1.ControllerRevision) (*workloadsv1alpha1.RoleBasedGroup, error) {
+	// clone := lws.DeepCopy()
+	str := &bytes.Buffer{}
+	err := unstructured.UnstructuredJSONScheme.Encode(rbg, str)
+	if err != nil {
+		return nil, err
+	}
+	patched, err := strategicpatch.StrategicMergePatch(str.Bytes(), revision.Data.Raw, rbg)
+	if err != nil {
+		return nil, err
+	}
+	restoredRbg := &workloadsv1alpha1.RoleBasedGroup{}
+	if err = json.Unmarshal(patched, restoredRbg); err != nil {
+		return nil, err
+	}
+	return restoredRbg, nil
+}
+
+func CleanExpiredRevision(ctx context.Context, client client.Client, rbg *workloadsv1alpha1.RoleBasedGroup, revisions []*appsv1.ControllerRevision) ([]*appsv1.ControllerRevision, error) {
+	// todo: Use the default value temporarily, and add new attribute fields in RBG later
+	exceedNum := len(revisions) - 10
+	if exceedNum <= 0 {
+		return revisions, nil
+	}
+
+	sort.SliceStable(revisions, func(i, j int) bool {
+		if revisions[i].Revision == revisions[j].Revision {
+			if revisions[i].CreationTimestamp.Equal(&revisions[j].CreationTimestamp) {
+				return revisions[i].Name < revisions[j].Name
+			}
+			return revisions[i].CreationTimestamp.Before(&revisions[j].CreationTimestamp)
+		}
+		return revisions[i].Revision < revisions[j].Revision
+	})
+
+	for i, revision := range revisions {
+		if i >= exceedNum {
+			break
+		}
+
+		if err := client.Delete(context.TODO(), revision); err != nil {
+			return revisions, err
+		}
+	}
+	cleanedRevisions := revisions[exceedNum:]
+
+	return cleanedRevisions, nil
 }
 
 func NewRevision(ctx context.Context, client client.Client, rbg *workloadsv1alpha1.RoleBasedGroup) (*appsv1.ControllerRevision, error) {
@@ -97,7 +135,7 @@ func NewRevision(ctx context.Context, client client.Client, rbg *workloadsv1alph
 		return nil, err
 	}
 	highestRevision := GetHighestRevision(revisions)
-	revision := int64(0)
+	revision := int64(1)
 	if highestRevision != nil {
 		revision = highestRevision.Revision + 1
 	}
@@ -150,7 +188,6 @@ func revisionName(prefix string, hash string, revisionNumber int64) string {
 	return fmt.Sprintf("%s-%s-%v", prefix, hash, revisionNumber)
 }
 
-// getRoleHashMap 从 ControllerRevision 中提取每个 role 的哈希值
 func getRoleHashMap(revision *appsv1.ControllerRevision) (map[string]string, error) {
 	result := make(map[string]string)
 
@@ -159,13 +196,11 @@ func getRoleHashMap(revision *appsv1.ControllerRevision) (map[string]string, err
 		return result, nil
 	}
 
-	// 反序列化 JSON
 	var obj map[string]interface{}
 	if err := json.Unmarshal(revision.Data.Raw, &obj); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal ControllerRevision data: %w", err)
 	}
 
-	// 获取 spec.roles
 	spec, ok := obj["spec"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("spec not found or wrong type")
@@ -176,23 +211,16 @@ func getRoleHashMap(revision *appsv1.ControllerRevision) (map[string]string, err
 		return nil, fmt.Errorf("roles not found or wrong type")
 	}
 
-	// 遍历每个 role
 	for _, r := range roles {
 		roleMap, ok := r.(map[string]interface{})
 		if !ok {
 			return nil, fmt.Errorf("invalid role structure")
 		}
-
-		// 提取 name
 		nameVal, ok := roleMap["name"].(string)
 		if !ok || nameVal == "" {
 			return nil, fmt.Errorf("role missing name field")
 		}
 
-		// 去掉 $patch 元数据
-		delete(roleMap, "$patch")
-
-		// JSON 序列化
 		roleBytes, err := json.Marshal(roleMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal role: %w", err)
@@ -209,6 +237,8 @@ func getRoleHashMap(revision *appsv1.ControllerRevision) (map[string]string, err
 }
 
 func getRBGPatch(rbg *workloadsv1alpha1.RoleBasedGroup) ([]byte, error) {
+	// str := &bytes.Buffer{}
+
 	rbgBytes, err := json.Marshal(rbg)
 	if err != nil {
 		return nil, err
@@ -222,10 +252,11 @@ func getRBGPatch(rbg *workloadsv1alpha1.RoleBasedGroup) ([]byte, error) {
 	objCopy := make(map[string]interface{})
 	specCopy := make(map[string]interface{})
 	spec := raw["spec"].(map[string]interface{})
-	roles := spec["roles"].(map[string]interface{})
+	roles := spec["roles"].([]interface{})
+
 	specCopy["roles"] = roles
-	roles["$patch"] = "replace"
 	objCopy["spec"] = specCopy
+	specCopy["$path"] = "replace"
 	return json.Marshal(objCopy)
 }
 

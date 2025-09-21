@@ -81,6 +81,9 @@ func NewRoleBasedGroupReconciler(mgr ctrl.Manager) *RoleBasedGroupReconciler {
 // +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=controllerrevisions,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=controllerrevisions/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=apps,resources=controllerrevisions/finalizers,verbs=update
 func (r *RoleBasedGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Fetch the RoleBasedGroup instance
 	rbg := &workloadsv1alpha1.RoleBasedGroup{}
@@ -177,7 +180,8 @@ func (r *RoleBasedGroupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, err
 		}
 
-		if err := reconciler.Reconciler(roleCtx, rbg, role, currentRevision, expectedRevision); err != nil {
+		roleRevisionKey := expectedRevision.ObjectMeta.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, role.Name)]
+		if err := reconciler.Reconciler(roleCtx, rbg, role, roleRevisionKey); err != nil {
 			logger.Error(err, "Failed to reconcile workload")
 			r.recorder.Eventf(
 				rbg, corev1.EventTypeWarning, FailedReconcileWorkload,
@@ -380,6 +384,10 @@ func (r *RoleBasedGroupReconciler) getOrCreateRevisionIfNotExist(ctx context.Con
 		return nil, err
 	}
 	revisions, err := utils.ListRevisions(ctx, r.client, rbg, selector)
+	if err != nil {
+		return nil, err
+	}
+	revisions, err = utils.CleanExpiredRevision(ctx, r.client, rbg, revisions)
 	if err != nil {
 		return nil, err
 	}

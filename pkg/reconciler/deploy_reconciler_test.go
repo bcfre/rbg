@@ -119,7 +119,8 @@ func TestDeploymentReconciler_Reconciler(t *testing.T) {
 				}
 
 				ctx := context.Background()
-				err := r.Reconciler(ctx, tt.rbg, tt.role)
+				expectedRevisionHash := "revision-hash-value"
+				err := r.Reconciler(ctx, tt.rbg, tt.role, expectedRevisionHash)
 
 				if (err != nil) != tt.expectError {
 					t.Errorf("DeploymentReconciler.Reconciler() error = %v, expectError %v", err, tt.expectError)
@@ -148,6 +149,10 @@ func TestDeploymentReconciler_Reconciler(t *testing.T) {
 						if err != nil {
 							t.Errorf("Expected deployment to exist for update, but got error: %v", err)
 						}
+					}
+
+					if expectedRevisionHash != deploy.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, tt.role.Name)] {
+						t.Errorf("Expected revision hash %s, got %s", expectedRevisionHash, deploy.Labels[fmt.Sprintf(workloadsv1alpha1.RoleRevisionKeyFmt, tt.role.Name)])
 					}
 				}
 			},
@@ -644,7 +649,7 @@ func TestDeploymentReconciler_constructDeployApplyConfiguration(t *testing.T) {
 				}
 
 				ctx := context.Background()
-				_, err := r.constructDeployApplyConfiguration(ctx, tt.rbg, tt.role, tt.oldDeploy)
+				_, err := r.constructDeployApplyConfiguration(ctx, tt.rbg, tt.role, tt.oldDeploy, "revision-key")
 
 				if (err != nil) != tt.expectError {
 					t.Errorf(
