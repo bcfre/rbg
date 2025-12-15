@@ -9,7 +9,13 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/klog/v2"
+	applyconfiguration "sigs.k8s.io/rbgs/client-go/applyconfiguration/workloads/v1alpha1"
+	"sigs.k8s.io/rbgs/pkg/utils"
 )
 
 // RenderDeploymentYAML generates RBG deployment YAML from generator config
@@ -18,10 +24,10 @@ func RenderDeploymentYAML(plan *DeploymentPlan) error {
 	var err error
 
 	switch plan.Mode {
-	case "agg":
-		yamlContent, err = renderAggYAML(plan)
 	case "disagg":
 		yamlContent, err = renderDisaggYAML(plan)
+	case "agg":
+		yamlContent, err = renderAggYAML(plan)
 	default:
 		return fmt.Errorf("unknown deployment mode: %s", plan.Mode)
 	}
@@ -45,29 +51,25 @@ func renderDisaggYAML(plan *DeploymentPlan) (string, error) {
 	prefillParams := GetWorkerParams(config.Params.Prefill)
 	decodeParams := GetWorkerParams(config.Params.Decode)
 
-	// Get base name for the deployment，要加一个随机时间戳
+	// Get base name for the deployment
 	baseName := getDeployName(plan.ModelName, plan.BackendName, "pd")
 	modelPath := getModelPath(plan.ModelName, plan.HuggingFaceID)
-	image := getImage(plan.BackendName) // 格式化
+	image := getImage(plan.BackendName)
 
-	// Build RoleBasedGroup spec
-	rbg := map[string]interface{}{
-		"apiVersion": "workloads.x-k8s.io/v1alpha1",
-		"kind":       "RoleBasedGroup",
-		"metadata": map[string]interface{}{
-			"name": baseName,
-		},
-		"spec": map[string]interface{}{
-			"roles": []interface{}{
-				buildRouterRole(baseName, image, plan.BackendName),
-				buildPrefillRole(baseName, image, modelPath, plan.BackendName, config.Workers.PrefillWorkers, prefillParams),
-				buildDecodeRole(baseName, image, modelPath, plan.BackendName, config.Workers.DecodeWorkers, decodeParams),
-			},
-		},
-	}
+	// Build RoleBasedGroup using builder pattern
+	gkv := utils.GetRbgGVK()
+	rbg := applyconfiguration.RoleBasedGroup(baseName, "default").
+		WithKind(gkv.Kind).
+		WithAPIVersion(gkv.GroupVersion().String()).
+		WithSpec(applyconfiguration.RoleBasedGroupSpec().
+			WithRoles(
+				buildRouterRoleSpec(baseName, image, plan.BackendName),
+				buildPrefillRoleSpec(image, modelPath, plan.BackendName, config.Workers.PrefillWorkers, prefillParams),
+				buildDecodeRoleSpec(image, modelPath, plan.BackendName, config.Workers.DecodeWorkers, decodeParams),
+			))
 
 	// Build Service
-	service := buildService(baseName, "router")
+	service := buildServiceSpec(baseName, "router")
 
 	// Combine RBG and Service
 	return marshalMultiDocYAML(rbg, service)
@@ -82,386 +84,449 @@ func renderAggYAML(plan *DeploymentPlan) (string, error) {
 	modelPath := getModelPath(plan.ModelName, plan.HuggingFaceID)
 	image := getImage(plan.BackendName)
 
-	// Build RoleBasedGroup spec
-	rbg := map[string]interface{}{
-		"apiVersion": "workloads.x-k8s.io/v1alpha1",
-		"kind":       "RoleBasedGroup",
-		"metadata": map[string]interface{}{
-			"name": baseName,
-		},
-		"spec": map[string]interface{}{
-			"roles": []interface{}{
-				buildWorkerRole(baseName, image, modelPath, plan.BackendName, config.Workers.AggWorkers, aggParams),
-			},
-		},
-	}
+	// Build RoleBasedGroup using builder pattern
+	gkv := utils.GetRbgGVK()
+	rbg := applyconfiguration.RoleBasedGroup(baseName, "default").
+		WithKind(gkv.Kind).
+		WithAPIVersion(gkv.GroupVersion().String()).
+		WithSpec(applyconfiguration.RoleBasedGroupSpec().
+			WithRoles(
+				buildWorkerRoleSpec(image, modelPath, plan.BackendName, config.Workers.AggWorkers, aggParams),
+			))
 
 	// Build Service
-	service := buildService(baseName, "worker")
+	service := buildServiceSpec(baseName, "worker")
 
 	return marshalMultiDocYAML(rbg, service)
 }
 
-// buildRouterRole creates the router role configuration for sglang
-func buildRouterRole(baseName, image, backend string) map[string]interface{} {
+// buildRouterRoleSpec creates the router role spec using builder pattern
+func buildRouterRoleSpec(baseName, image, backend string) *applyconfiguration.RoleSpecApplyConfiguration {
 	if backend != "sglang" {
-		// For non-sglang backends, router might not be needed or different
-		klog.V(1).Infof("Router role configuration for backend %s not fully implemented", backend)
+		klog.Fatalf("Router role configuration for backend %s not implemented", backend)
 	}
 
-	return map[string]interface{}{
-		"name":     "router",
-		"replicas": 1,
-		"template": map[string]interface{}{
-			"spec": map[string]interface{}{
-				"volumes": []interface{}{
-					map[string]interface{}{
-						"name": "model",
-						"persistentVolumeClaim": map[string]interface{}{
-							"claimName": "llm-model",
-						},
-					},
-				},
-				"containers": []interface{}{
-					map[string]interface{}{
-						"name":  "scheduler",
-						"image": "lmsysorg/sglang-router:v0.2.2",
-						"command": []string{
-							"sh",
-							"-c",
-							fmt.Sprintf("python3 -m sglang_router.launch_router --log-level debug --pd-disaggregation "+
-								"--host 0.0.0.0 --port 8000 "+
-								"--prefill http://%s-prefill-0.s-%s-prefill:8000 34000 "+
-								"--decode http://%s-decode-0.s-%s-decode:8000 "+
-								"--policy random --prometheus-host 0.0.0.0 --prometheus-port 9090",
-								baseName, baseName, baseName, baseName),
-						},
-						"volumeMounts": []interface{}{
-							map[string]interface{}{
-								"mountPath": "/models/",
-								"name":      "model",
-							},
-						},
-					},
-				},
-			},
-		},
+	command := []string{
+		"python3",
+		"-m",
+		"sglang_router.launch_router",
+		"--pd-disaggregation",
+		"--prefill",
+		fmt.Sprintf("http://%s-prefill-0.s-%s-prefill:8000", baseName, baseName),
+		"--decode",
+		fmt.Sprintf("http://%s-decode-0.s-%s-decode:8000", baseName, baseName),
+		"--host",
+		"0.0.0.0",
+		"--port",
+		"8000",
 	}
+
+	podTemplate := applycorev1.PodTemplateSpec().
+		WithSpec(applycorev1.PodSpec().
+			WithVolumes(
+				applycorev1.Volume().
+					WithName("model").
+					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
+						WithClaimName("llm-model")),
+			).
+			WithContainers(
+				applycorev1.Container().
+					WithName("router").
+					WithImage(image).
+					WithCommand(command...).
+					WithVolumeMounts(
+						applycorev1.VolumeMount().
+							WithName("model").
+							WithMountPath("/models/"),
+					),
+			))
+
+	return applyconfiguration.RoleSpec().
+		WithName("router").
+		WithReplicas(1).
+		WithTemplate(podTemplate)
 }
 
-// buildPrefillRole creates the prefill role configuration
-func buildPrefillRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
-	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-
+// buildPrefillRoleSpec creates the prefill role spec using builder pattern
+func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+	shmSize := resource.MustParse("30Gi")
+	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildPrefillCommand(backend, modelPath, params)
 
-	return map[string]interface{}{
-		"name":     "prefill",
-		"replicas": replicas,
-		"template": map[string]interface{}{
-			"spec": map[string]interface{}{
-				"volumes": []interface{}{
-					map[string]interface{}{
-						"name": "model",
-						"persistentVolumeClaim": map[string]interface{}{
-							"claimName": "llm-model",
-						},
-					},
-					map[string]interface{}{
-						"name": "shm",
-						"emptyDir": map[string]interface{}{
-							"medium":    "Memory",
-							"sizeLimit": shmSize,
-						},
-					},
-				},
-				"containers": []interface{}{
-					map[string]interface{}{
-						"name":            fmt.Sprintf("%s-prefill", backend),
-						"image":           image,
-						"imagePullPolicy": "Always",
-						"env": []interface{}{
-							map[string]interface{}{
-								"name": "POD_IP",
-								"valueFrom": map[string]interface{}{
-									"fieldRef": map[string]interface{}{
-										"fieldPath": "status.podIP",
-									},
-								},
-							},
-							map[string]interface{}{
-								"name":  "SGLANG_PORT",
-								"value": "8000",
-							},
-						},
-						"command": command,
-						"ports": []interface{}{
-							map[string]interface{}{"containerPort": 8000},
-							map[string]interface{}{"containerPort": 34000},
-						},
-						"readinessProbe": map[string]interface{}{
-							"initialDelaySeconds": 30,
-							"periodSeconds":       10,
-							"tcpSocket": map[string]interface{}{
-								"port": 8000,
-							},
-						},
-						"resources": map[string]interface{}{
-							"limits": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-							"requests": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-						},
-						"volumeMounts": []interface{}{
-							map[string]interface{}{
-								"mountPath": "/models/",
-								"name":      "model",
-							},
-							map[string]interface{}{
-								"mountPath": "/dev/shm",
-								"name":      "shm",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	podTemplate := applycorev1.PodTemplateSpec().
+		WithSpec(applycorev1.PodSpec().
+			WithVolumes(
+				applycorev1.Volume().
+					WithName("model").
+					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
+						WithClaimName("llm-model")),
+				applycorev1.Volume().
+					WithName("shm").
+					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
+						WithMedium(corev1.StorageMediumMemory).
+						WithSizeLimit(shmSize)),
+			).
+			WithContainers(
+				applycorev1.Container().
+					WithName(fmt.Sprintf("%s-prefill", backend)).
+					WithImage(image).
+					WithImagePullPolicy(corev1.PullAlways).
+					WithEnv(
+						applycorev1.EnvVar().
+							WithName("POD_IP").
+							WithValueFrom(applycorev1.EnvVarSource().
+								WithFieldRef(applycorev1.ObjectFieldSelector().
+									WithFieldPath("status.podIP"))),
+					).
+					WithCommand(command...).
+					WithPorts(
+						applycorev1.ContainerPort().WithContainerPort(8000),
+					).
+					WithReadinessProbe(applycorev1.Probe().
+						WithInitialDelaySeconds(30).
+						WithPeriodSeconds(10).
+						WithTCPSocket(applycorev1.TCPSocketAction().
+							WithPort(intstr.FromInt(8000)))).
+					WithResources(applycorev1.ResourceRequirements().
+						WithLimits(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						}).
+						WithRequests(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						})).
+					WithVolumeMounts(
+						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
+					),
+			))
+
+	return applyconfiguration.RoleSpec().
+		WithName("prefill").
+		WithReplicas(int32(replicas)).
+		WithTemplate(podTemplate)
 }
 
-// buildDecodeRole creates the decode role configuration
-func buildDecodeRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
-	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-
+// buildDecodeRoleSpec creates the decode role spec using builder pattern
+func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+	shmSize := resource.MustParse("30Gi")
+	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildDecodeCommand(backend, modelPath, params)
 
-	return map[string]interface{}{
-		"name":     "decode",
-		"replicas": replicas,
-		"template": map[string]interface{}{
-			"spec": map[string]interface{}{
-				"volumes": []interface{}{
-					map[string]interface{}{
-						"name": "model",
-						"persistentVolumeClaim": map[string]interface{}{
-							"claimName": "llm-model",
-						},
-					},
-					map[string]interface{}{
-						"name": "shm",
-						"emptyDir": map[string]interface{}{
-							"medium":    "Memory",
-							"sizeLimit": shmSize,
-						},
-					},
-				},
-				"containers": []interface{}{
-					map[string]interface{}{
-						"name":            fmt.Sprintf("%s-decode", backend),
-						"image":           image,
-						"imagePullPolicy": "Always",
-						"env": []interface{}{
-							map[string]interface{}{
-								"name": "POD_IP",
-								"valueFrom": map[string]interface{}{
-									"fieldRef": map[string]interface{}{
-										"fieldPath": "status.podIP",
-									},
-								},
-							},
-							map[string]interface{}{
-								"name":  "SGLANG_PORT",
-								"value": "8000",
-							},
-						},
-						"command": command,
-						"ports": []interface{}{
-							map[string]interface{}{"containerPort": 8000},
-						},
-						"readinessProbe": map[string]interface{}{
-							"initialDelaySeconds": 30,
-							"periodSeconds":       10,
-							"tcpSocket": map[string]interface{}{
-								"port": 8000,
-							},
-						},
-						"resources": map[string]interface{}{
-							"limits": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-							"requests": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-						},
-						"volumeMounts": []interface{}{
-							map[string]interface{}{
-								"mountPath": "/models/",
-								"name":      "model",
-							},
-							map[string]interface{}{
-								"mountPath": "/dev/shm",
-								"name":      "shm",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	podTemplate := applycorev1.PodTemplateSpec().
+		WithSpec(applycorev1.PodSpec().
+			WithVolumes(
+				applycorev1.Volume().
+					WithName("model").
+					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
+						WithClaimName("llm-model")),
+				applycorev1.Volume().
+					WithName("shm").
+					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
+						WithMedium(corev1.StorageMediumMemory).
+						WithSizeLimit(shmSize)),
+			).
+			WithContainers(
+				applycorev1.Container().
+					WithName(fmt.Sprintf("%s-decode", backend)).
+					WithImage(image).
+					WithImagePullPolicy(corev1.PullAlways).
+					WithEnv(
+						applycorev1.EnvVar().
+							WithName("POD_IP").
+							WithValueFrom(applycorev1.EnvVarSource().
+								WithFieldRef(applycorev1.ObjectFieldSelector().
+									WithFieldPath("status.podIP"))),
+					).
+					WithCommand(command...).
+					WithPorts(
+						applycorev1.ContainerPort().WithContainerPort(8000),
+					).
+					WithReadinessProbe(applycorev1.Probe().
+						WithInitialDelaySeconds(30).
+						WithPeriodSeconds(10).
+						WithTCPSocket(applycorev1.TCPSocketAction().
+							WithPort(intstr.FromInt(8000)))).
+					WithResources(applycorev1.ResourceRequirements().
+						WithLimits(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						}).
+						WithRequests(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						})).
+					WithVolumeMounts(
+						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
+					),
+			))
+
+	return applyconfiguration.RoleSpec().
+		WithName("decode").
+		WithReplicas(int32(replicas)).
+		WithTemplate(podTemplate)
 }
 
-// buildWorkerRole creates the worker role for aggregated mode
-func buildWorkerRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
-	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-
+// buildWorkerRoleSpec creates the worker role spec for aggregated mode using builder pattern
+func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildAggCommand(backend, modelPath, params)
 
-	return map[string]interface{}{
-		"name":     "worker",
-		"replicas": replicas,
-		"template": map[string]interface{}{
-			"spec": map[string]interface{}{
-				"volumes": []interface{}{
-					map[string]interface{}{
-						"name": "model",
-						"persistentVolumeClaim": map[string]interface{}{
-							"claimName": "llm-model",
-						},
-					},
-					map[string]interface{}{
-						"name": "shm",
-						"emptyDir": map[string]interface{}{
-							"medium":    "Memory",
-							"sizeLimit": shmSize,
-						},
-					},
-				},
-				"containers": []interface{}{
-					map[string]interface{}{
-						"name":            fmt.Sprintf("%s-worker", backend),
-						"image":           image,
-						"imagePullPolicy": "Always",
-						"env": []interface{}{
-							map[string]interface{}{
-								"name": "POD_IP",
-								"valueFrom": map[string]interface{}{
-									"fieldRef": map[string]interface{}{
-										"fieldPath": "status.podIP",
-									},
-								},
-							},
-						},
-						"command": command,
-						"ports": []interface{}{
-							map[string]interface{}{"containerPort": 8000},
-						},
-						"readinessProbe": map[string]interface{}{
-							"initialDelaySeconds": 30,
-							"periodSeconds":       10,
-							"tcpSocket": map[string]interface{}{
-								"port": 8000,
-							},
-						},
-						"resources": map[string]interface{}{
-							"limits": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-							"requests": map[string]interface{}{
-								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-							},
-						},
-						"volumeMounts": []interface{}{
-							map[string]interface{}{
-								"mountPath": "/models/",
-								"name":      "model",
-							},
-							map[string]interface{}{
-								"mountPath": "/dev/shm",
-								"name":      "shm",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	podTemplate := applycorev1.PodTemplateSpec().
+		WithSpec(applycorev1.PodSpec().
+			WithVolumes(
+				applycorev1.Volume().
+					WithName("model").
+					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
+						WithClaimName("llm-model")),
+				applycorev1.Volume().
+					WithName("shm").
+					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
+						WithMedium(corev1.StorageMediumMemory)),
+			).
+			WithContainers(
+				applycorev1.Container().
+					WithName(fmt.Sprintf("%s-worker", backend)).
+					WithImage(image).
+					WithEnv(
+						applycorev1.EnvVar().
+							WithName("POD_IP").
+							WithValueFrom(applycorev1.EnvVarSource().
+								WithFieldRef(applycorev1.ObjectFieldSelector().
+									WithFieldPath("status.podIP"))),
+					).
+					WithCommand(command...).
+					WithPorts(
+						applycorev1.ContainerPort().WithContainerPort(8000),
+					).
+					WithReadinessProbe(applycorev1.Probe().
+						WithInitialDelaySeconds(30).
+						WithPeriodSeconds(10).
+						WithTCPSocket(applycorev1.TCPSocketAction().
+							WithPort(intstr.FromInt(8000)))).
+					WithResources(applycorev1.ResourceRequirements().
+						WithLimits(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						}).
+						WithRequests(corev1.ResourceList{
+							"nvidia.com/gpu": gpuQuantity,
+						})).
+					WithVolumeMounts(
+						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
+					),
+			))
+
+	return applyconfiguration.RoleSpec().
+		WithName("worker").
+		WithReplicas(int32(replicas)).
+		WithTemplate(podTemplate)
 }
 
-// buildService creates a Kubernetes Service resource
-func buildService(baseName, targetRole string) map[string]interface{} {
-	return map[string]interface{}{
-		"apiVersion": "v1",
-		"kind":       "Service",
-		"metadata": map[string]interface{}{
-			"labels": map[string]interface{}{
-				"app": baseName,
-			},
-			"name":      baseName,
-			"namespace": "default",
-		},
-		"spec": map[string]interface{}{
-			"ports": []interface{}{
-				map[string]interface{}{
-					"name":       "http",
-					"port":       8000,
-					"protocol":   "TCP",
-					"targetPort": 8000,
-				},
-			},
-			"selector": map[string]interface{}{
+// buildServiceSpec creates a Kubernetes Service resource using builder pattern
+func buildServiceSpec(baseName, targetRole string) *applycorev1.ServiceApplyConfiguration {
+	return applycorev1.Service(baseName, "default").
+		WithAPIVersion("v1").
+		WithKind("Service").
+		WithLabels(map[string]string{
+			"app": baseName,
+		}).
+		WithSpec(applycorev1.ServiceSpec().
+			WithPorts(
+				applycorev1.ServicePort().
+					WithName("http").
+					WithPort(8000).
+					WithProtocol(corev1.ProtocolTCP).
+					WithTargetPort(intstr.FromInt(8000)),
+			).
+			WithSelector(map[string]string{
 				"rolebasedgroup.workloads.x-k8s.io/name": baseName,
 				"rolebasedgroup.workloads.x-k8s.io/role": targetRole,
-			},
-			"type": "ClusterIP",
-		},
-	}
+			}).
+			WithType(corev1.ServiceTypeClusterIP))
 }
 
 // buildPrefillCommand constructs the prefill worker command
 func buildPrefillCommand(backend, modelPath string, params WorkerParams) []string {
 	if backend == "sglang" {
-		cmd := fmt.Sprintf(
-			"python3 -m sglang.launch_server --model-path %s --enable-metrics "+
-				"--disaggregation-mode prefill --port 8000 --disaggregation-bootstrap-port 34000 "+
-				"--host 0.0.0.0 --tp-size %d",
-			modelPath, params.TensorParallelSize,
-		)
-		return []string{"sh", "-c", cmd}
+		// Build command arguments for prefill mode
+		args := []string{
+			"-m",
+			"sglang.launch_server",
+			"--model-path",
+			modelPath,
+			"--enable-metrics",
+			"--disaggregation-mode",
+			"prefill",
+			"--port",
+			"8000",
+			"--disaggregation-bootstrap-port",
+			"34000",
+			"--host",
+			"$(POD_IP)",
+		}
+
+		// Add tensor-parallel-size
+		if params.TensorParallelSize > 0 {
+			args = append(args, "--tensor-parallel-size", fmt.Sprintf("%d", params.TensorParallelSize))
+		}
+
+		// Add pipeline-parallel-size
+		if params.PipelineParallelSize > 0 {
+			args = append(args, "--pipeline-parallel-size", fmt.Sprintf("%d", params.PipelineParallelSize))
+		}
+
+		// Add data-parallel-size
+		if params.DataParallelSize > 0 {
+			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
+		}
+
+		// Add kv-cache-dtype
+		if params.KVCacheDtype != "" {
+			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
+		}
+
+		// Add max-running-requests (mapped from MaxBatchSize)
+		if params.MaxBatchSize > 0 {
+			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
+		}
+
+		// Add expert-parallel-size
+		if params.MoEExpertParallelSize > 0 {
+			args = append(args, "--expert-parallel-size", fmt.Sprintf("%d", params.MoEExpertParallelSize))
+		}
+
+		// Add moe-dense-tp-size
+		if params.MoETensorParallelSize > 0 {
+			args = append(args, "--moe-dense-tp-size", fmt.Sprintf("%d", params.MoETensorParallelSize))
+		}
+
+		return append([]string{"python3"}, args...)
 	}
 	// Add support for other backends as needed
-	return []string{"sh", "-c", fmt.Sprintf("echo 'Backend %s not yet supported'", backend)}
+	return []string{"echo", fmt.Sprintf("Backend %s not yet supported", backend)}
 }
 
 // buildDecodeCommand constructs the decode worker command
 func buildDecodeCommand(backend, modelPath string, params WorkerParams) []string {
 	if backend == "sglang" {
-		cmd := fmt.Sprintf(
-			"python3 -m sglang.launch_server --model-path %s --enable-metrics "+
-				"--disaggregation-mode decode --port 8000 --host 0.0.0.0 "+
-				"--mem-fraction-static %.2f --tp-size %d",
-			modelPath, params.KVCacheFreeGPUMemoryFraction, params.TensorParallelSize,
-		)
-		return []string{"sh", "-c", cmd}
+		// Build command arguments for decode mode
+		args := []string{
+			"-m",
+			"sglang.launch_server",
+			"--model-path",
+			modelPath,
+			"--enable-metrics",
+			"--disaggregation-mode",
+			"decode",
+			"--port",
+			"8000",
+			"--host",
+			"$(POD_IP)",
+		}
+
+		// Add tensor-parallel-size
+		if params.TensorParallelSize > 0 {
+			args = append(args, "--tensor-parallel-size", fmt.Sprintf("%d", params.TensorParallelSize))
+		}
+
+		// Add pipeline-parallel-size
+		if params.PipelineParallelSize > 0 {
+			args = append(args, "--pipeline-parallel-size", fmt.Sprintf("%d", params.PipelineParallelSize))
+		}
+
+		// Add data-parallel-size
+		if params.DataParallelSize > 0 {
+			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
+		}
+
+		// Add kv-cache-dtype
+		if params.KVCacheDtype != "" {
+			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
+		}
+
+		// Add max-running-requests (mapped from MaxBatchSize)
+		if params.MaxBatchSize > 0 {
+			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
+		}
+
+		// Add expert-parallel-size
+		if params.MoEExpertParallelSize > 0 {
+			args = append(args, "--expert-parallel-size", fmt.Sprintf("%d", params.MoEExpertParallelSize))
+		}
+
+		// Add moe-dense-tp-size
+		if params.MoETensorParallelSize > 0 {
+			args = append(args, "--moe-dense-tp-size", fmt.Sprintf("%d", params.MoETensorParallelSize))
+		}
+
+		// Add mem-fraction-static (for KV cache)
+		if params.KVCacheFreeGPUMemoryFraction > 0 {
+			args = append(args, "--mem-fraction-static", fmt.Sprintf("%.2f", params.KVCacheFreeGPUMemoryFraction))
+		}
+
+		return append([]string{"python3"}, args...)
 	}
-	return []string{"sh", "-c", fmt.Sprintf("echo 'Backend %s not yet supported'", backend)}
+	return []string{"echo", fmt.Sprintf("Backend %s not yet supported", backend)}
 }
 
 // buildAggCommand constructs the aggregated mode worker command
 func buildAggCommand(backend, modelPath string, params WorkerParams) []string {
 	if backend == "sglang" {
-		cmd := fmt.Sprintf(
-			"python3 -m sglang.launch_server --model-path %s --enable-metrics "+
-				"--port 8000 --host 0.0.0.0 --tp-size %d",
-			modelPath, params.TensorParallelSize,
-		)
-		if params.KVCacheFreeGPUMemoryFraction > 0 {
-			cmd += fmt.Sprintf(" --mem-fraction-static %.2f", params.KVCacheFreeGPUMemoryFraction)
+		// Build command arguments for aggregated mode
+		args := []string{
+			"-m",
+			"sglang.launch_server",
+			"--model-path",
+			modelPath,
+			"--enable-metrics",
+			"--port",
+			"8000",
+			"--host",
+			"$(POD_IP)",
 		}
-		return []string{"sh", "-c", cmd}
+
+		// Add tensor-parallel-size
+		if params.TensorParallelSize > 0 {
+			args = append(args, "--tensor-parallel-size", fmt.Sprintf("%d", params.TensorParallelSize))
+		}
+
+		// Add pipeline-parallel-size
+		if params.PipelineParallelSize > 0 {
+			args = append(args, "--pipeline-parallel-size", fmt.Sprintf("%d", params.PipelineParallelSize))
+		}
+
+		// Add data-parallel-size
+		if params.DataParallelSize > 0 {
+			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
+		}
+
+		// Add kv-cache-dtype
+		if params.KVCacheDtype != "" {
+			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
+		}
+
+		// Add max-running-requests (mapped from MaxBatchSize)
+		if params.MaxBatchSize > 0 {
+			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
+		}
+
+		// Add expert-parallel-size
+		if params.MoEExpertParallelSize > 0 {
+			args = append(args, "--expert-parallel-size", fmt.Sprintf("%d", params.MoEExpertParallelSize))
+		}
+
+		// Add moe-dense-tp-size (mapped from MoETensorParallelSize)
+		if params.MoETensorParallelSize > 0 {
+			args = append(args, "--moe-dense-tp-size", fmt.Sprintf("%d", params.MoETensorParallelSize))
+		}
+
+		// Add mem-fraction-static (for KV cache)
+		if params.KVCacheFreeGPUMemoryFraction > 0 {
+			args = append(args, "--mem-fraction-static", fmt.Sprintf("%.2f", params.KVCacheFreeGPUMemoryFraction))
+		}
+
+		return append([]string{"python3"}, args...)
 	}
-	return []string{"sh", "-c", fmt.Sprintf("echo 'Backend %s not yet supported'", backend)}
+	return []string{"echo", fmt.Sprintf("Backend %s not yet supported", backend)}
 }
 
 // getDeployName generates a deploy name with a random suffix to avoid conflicts
