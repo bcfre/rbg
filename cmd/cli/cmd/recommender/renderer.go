@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	applycorev1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/klog/v2"
@@ -585,6 +586,7 @@ func getImage(backend string) string {
 }
 
 // marshalMultiDocYAML marshals multiple documents into a YAML string
+// Handles both regular Kubernetes objects and ApplyConfiguration objects
 func marshalMultiDocYAML(docs ...interface{}) (string, error) {
 	var result strings.Builder
 
@@ -593,7 +595,13 @@ func marshalMultiDocYAML(docs ...interface{}) (string, error) {
 			result.WriteString("---\n")
 		}
 
-		data, err := yaml.Marshal(doc)
+		// Convert ApplyConfiguration to unstructured format
+		unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(doc)
+		if err != nil {
+			return "", fmt.Errorf("failed to convert document %d to unstructured: %w", i, err)
+		}
+
+		data, err := yaml.Marshal(unstructuredObj)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal document %d: %w", i, err)
 		}
