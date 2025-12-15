@@ -1,0 +1,184 @@
+apiVersion: workloads.x-k8s.io/v1alpha1
+kind: RoleBasedGroup
+metadata:
+  name: qwen3-32b-sglang-pd-2aa44
+  namespace: default
+spec:
+  roles:
+    - name: router
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang_router.launch_router
+                - --pd-disaggregation
+                - --prefill
+                - http://qwen3-32b-sglang-pd-2aa44-prefill-0.s-qwen3-32b-sglang-pd-2aa44-prefill:8000
+                - --decode
+                - http://qwen3-32b-sglang-pd-2aa44-decode-0.s-qwen3-32b-sglang-pd-2aa44-decode:8000
+                - --host
+                - 0.0.0.0
+                - --port
+                - "8000"
+              image: lmsysorg/sglang:latest
+              name: router
+              volumeMounts:
+                - mountPath: /models/
+                  name: model
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: llm-model
+    - name: prefill
+      replicas: 4
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang.launch_server
+                - --model-path
+                - /models/QWEN3_32B/
+                - --enable-metrics
+                - --disaggregation-mode
+                - prefill
+                - --port
+                - "8000"
+                - --disaggregation-bootstrap-port
+                - "34000"
+                - --host
+                - $(POD_IP)
+                - --tensor-parallel-size
+                - "1"
+                - --pipeline-parallel-size
+                - "1"
+                - --data-parallel-size
+                - "1"
+                - --kv-cache-dtype
+                - fp8
+                - --max-running-requests
+                - "1"
+                - --expert-parallel-size
+                - "1"
+                - --moe-dense-tp-size
+                - "1"
+              env:
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              image: lmsysorg/sglang:latest
+              imagePullPolicy: Always
+              name: sglang-prefill
+              ports:
+                - containerPort: 8000
+              readinessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                tcpSocket:
+                  port: 8000
+              resources:
+                limits:
+                  nvidia.com/gpu: "1"
+                requests:
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - mountPath: /models/
+                  name: model
+                - mountPath: /dev/shm
+                  name: shm
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: llm-model
+            - emptyDir:
+                medium: Memory
+                sizeLimit: 30Gi
+              name: shm
+    - name: decode
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang.launch_server
+                - --model-path
+                - /models/QWEN3_32B/
+                - --enable-metrics
+                - --disaggregation-mode
+                - decode
+                - --port
+                - "8000"
+                - --host
+                - $(POD_IP)
+                - --tensor-parallel-size
+                - "4"
+                - --pipeline-parallel-size
+                - "1"
+                - --data-parallel-size
+                - "1"
+                - --kv-cache-dtype
+                - fp8
+                - --max-running-requests
+                - "2"
+                - --expert-parallel-size
+                - "1"
+                - --moe-dense-tp-size
+                - "1"
+              env:
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              image: lmsysorg/sglang:latest
+              imagePullPolicy: Always
+              name: sglang-decode
+              ports:
+                - containerPort: 8000
+              readinessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                tcpSocket:
+                  port: 8000
+              resources:
+                limits:
+                  nvidia.com/gpu: "4"
+                requests:
+                  nvidia.com/gpu: "4"
+              volumeMounts:
+                - mountPath: /models/
+                  name: model
+                - mountPath: /dev/shm
+                  name: shm
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: llm-model
+            - emptyDir:
+                medium: Memory
+                sizeLimit: 30Gi
+              name: shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: qwen3-32b-sglang-pd-2aa44
+  name: qwen3-32b-sglang-pd-2aa44
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: 8000
+      protocol: TCP
+      targetPort: 8000
+  selector:
+    rolebasedgroup.workloads.x-k8s.io/name: qwen3-32b-sglang-pd-2aa44
+    rolebasedgroup.workloads.x-k8s.io/role: router
+  type: ClusterIP

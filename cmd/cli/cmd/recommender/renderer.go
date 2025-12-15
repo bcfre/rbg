@@ -601,11 +601,17 @@ func marshalMultiDocYAML(docs ...interface{}) (string, error) {
 			return "", fmt.Errorf("failed to convert document %d to unstructured: %w", i, err)
 		}
 
-		data, err := yaml.Marshal(unstructuredObj)
-		if err != nil {
+		// Use yaml encoder with custom indentation for more compact output
+		var buf strings.Builder
+		encoder := yaml.NewEncoder(&buf)
+		encoder.SetIndent(2) // 2 spaces indentation for compact format
+
+		if err := encoder.Encode(unstructuredObj); err != nil {
 			return "", fmt.Errorf("failed to marshal document %d: %w", i, err)
 		}
-		result.Write(data)
+		encoder.Close()
+
+		result.WriteString(buf.String())
 	}
 
 	return result.String(), nil
