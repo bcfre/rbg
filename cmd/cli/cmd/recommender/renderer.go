@@ -48,7 +48,7 @@ func renderDisaggYAML(plan *DeploymentPlan) (string, error) {
 	// Get base name for the deployment，要加一个随机时间戳
 	baseName := getDeployName(plan.ModelName, plan.BackendName, "pd")
 	modelPath := getModelPath(plan.ModelName, plan.HuggingFaceID)
-	image := getImage(plan.BackendName, config.K8s.K8sImage) // 格式化
+	image := getImage(plan.BackendName) // 格式化
 
 	// Build RoleBasedGroup spec
 	rbg := map[string]interface{}{
