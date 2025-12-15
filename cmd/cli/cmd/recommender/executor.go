@@ -21,13 +21,11 @@ func ExecuteAIConfigurator(config *TaskConfig) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if config.Debug {
-		klog.Info("=== Executing aiconfigurator command ===")
-		klog.Infof("aiconfigurator %s", joinArgs(args))
-		klog.Info("========================================")
-	}
+	klog.V(2).Info("=== Executing aiconfigurator command ===")
+	klog.V(2).Infof("aiconfigurator %s", joinArgs(args))
+	klog.V(2).Info("========================================")
 
-	klog.Info("Running AI Configurator optimization... This may take a few minutes.")
+	klog.Info("Running AI Configurator optimization... This may take a few seconds.")
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("aiconfigurator execution failed: %w\nPlease check the error output above", err)
@@ -72,10 +70,6 @@ func buildAIConfiguratorCommand(config *TaskConfig) []string {
 
 	if config.RequestLatency > 0 {
 		args = append(args, "--request_latency", strconv.FormatFloat(config.RequestLatency, 'f', -1, 64))
-	}
-
-	if config.Debug {
-		args = append(args, "--debug")
 	}
 
 	// Add extra arguments

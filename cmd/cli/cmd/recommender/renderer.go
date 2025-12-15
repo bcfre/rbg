@@ -1,25 +1,12 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package recommender
 
 import (
+	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/klog/v2"
@@ -31,10 +18,10 @@ func RenderDeploymentYAML(plan *DeploymentPlan) error {
 	var err error
 
 	switch plan.Mode {
-	case "disagg":
-		yamlContent, err = renderDisaggYAML(plan)
 	case "agg":
 		yamlContent, err = renderAggYAML(plan)
+	case "disagg":
+		yamlContent, err = renderDisaggYAML(plan)
 	default:
 		return fmt.Errorf("unknown deployment mode: %s", plan.Mode)
 	}
@@ -59,7 +46,7 @@ func renderDisaggYAML(plan *DeploymentPlan) (string, error) {
 	decodeParams := GetWorkerParams(config.Params.Decode)
 
 	// Get base name for the deployment，要加一个随机时间戳
-	baseName := getDeploymentName(plan.ModelName, plan.BackendName, "pd")
+	baseName := getDeployName(plan.ModelName, plan.BackendName, "pd")
 	modelPath := getModelPath(plan.ModelName, plan.HuggingFaceID)
 	image := getImage(plan.BackendName, config.K8s.K8sImage) // 格式化
 
@@ -91,9 +78,9 @@ func renderAggYAML(plan *DeploymentPlan) (string, error) {
 	config := plan.Config
 	aggParams := GetWorkerParams(config.Params.Agg)
 
-	baseName := getDeploymentName(plan.ModelName, plan.BackendName, "agg")
+	baseName := getDeployName(plan.ModelName, plan.BackendName, "agg")
 	modelPath := getModelPath(plan.ModelName, plan.HuggingFaceID)
-	image := getImage(plan.BackendName, config.K8s.K8sImage)
+	image := getImage(plan.BackendName)
 
 	// Build RoleBasedGroup spec
 	rbg := map[string]interface{}{
@@ -165,8 +152,6 @@ func buildRouterRole(baseName, image, backend string) map[string]interface{} {
 // buildPrefillRole creates the prefill role configuration
 func buildPrefillRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
 	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-	memoryLimit := fmt.Sprintf("%dGi", int(params.Memory*1.5))
-	cpuLimit := fmt.Sprintf("%d", params.TensorParallelSize*8)
 
 	command := buildPrefillCommand(backend, modelPath, params)
 
@@ -224,13 +209,9 @@ func buildPrefillRole(baseName, image, modelPath, backend string, replicas int, 
 						"resources": map[string]interface{}{
 							"limits": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 							"requests": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 						},
 						"volumeMounts": []interface{}{
@@ -253,8 +234,6 @@ func buildPrefillRole(baseName, image, modelPath, backend string, replicas int, 
 // buildDecodeRole creates the decode role configuration
 func buildDecodeRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
 	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-	memoryLimit := fmt.Sprintf("%dGi", int(params.Memory*1.5))
-	cpuLimit := fmt.Sprintf("%d", params.TensorParallelSize*8)
 
 	command := buildDecodeCommand(backend, modelPath, params)
 
@@ -311,13 +290,9 @@ func buildDecodeRole(baseName, image, modelPath, backend string, replicas int, p
 						"resources": map[string]interface{}{
 							"limits": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 							"requests": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 						},
 						"volumeMounts": []interface{}{
@@ -340,8 +315,6 @@ func buildDecodeRole(baseName, image, modelPath, backend string, replicas int, p
 // buildWorkerRole creates the worker role for aggregated mode
 func buildWorkerRole(baseName, image, modelPath, backend string, replicas int, params WorkerParams) map[string]interface{} {
 	shmSize := fmt.Sprintf("%dGi", params.TensorParallelSize*32)
-	memoryLimit := fmt.Sprintf("%dGi", int(params.Memory*1.5))
-	cpuLimit := fmt.Sprintf("%d", params.TensorParallelSize*8)
 
 	command := buildAggCommand(backend, modelPath, params)
 
@@ -394,13 +367,9 @@ func buildWorkerRole(baseName, image, modelPath, backend string, replicas int, p
 						"resources": map[string]interface{}{
 							"limits": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 							"requests": map[string]interface{}{
 								"nvidia.com/gpu": fmt.Sprintf("%d", params.TensorParallelSize),
-								"memory":         memoryLimit,
-								"cpu":            cpuLimit,
 							},
 						},
 						"volumeMounts": []interface{}{
@@ -495,11 +464,31 @@ func buildAggCommand(backend, modelPath string, params WorkerParams) []string {
 	return []string{"sh", "-c", fmt.Sprintf("echo 'Backend %s not yet supported'", backend)}
 }
 
-// getDeploymentName generates a deployment name
-func getDeploymentName(modelName, backend, suffix string) string {
+// getDeployName generates a deploy name with a random suffix to avoid conflicts
+// The suffix is a 5-character lowercase hex string that complies with DNS naming rules
+func getDeployName(modelName, backend, suffix string) string {
 	// Convert model name to lowercase and replace underscores
 	name := strings.ToLower(strings.ReplaceAll(modelName, "_", "-"))
-	return fmt.Sprintf("%s-%s-%s", name, backend, suffix)
+	// Generate a random 5-character suffix (DNS-safe: lowercase letters and numbers)
+	randomSuffix := generateRandomSuffix(5)
+	return fmt.Sprintf("%s-%s-%s-%s", name, backend, suffix, randomSuffix)
+}
+
+// generateRandomSuffix generates a random lowercase hex string of specified length
+// Uses timestamp as seed to ensure uniqueness across different runs
+func generateRandomSuffix(length int) string {
+	// Use current timestamp (nanoseconds) as seed for randomness
+	source := rand.NewSource(time.Now().UnixNano())
+	rng := rand.New(source)
+
+	// Calculate how many random bytes we need (2 hex chars per byte)
+	bytes := make([]byte, (length+1)/2)
+	for i := range bytes {
+		bytes[i] = byte(rng.Intn(256))
+	}
+
+	hexString := hex.EncodeToString(bytes)
+	return hexString[:length]
 }
 
 // getModelPath determines the model path based on HuggingFace ID or model name
@@ -516,11 +505,7 @@ func getModelPath(modelName, hfID string) string {
 }
 
 // getImage selects the appropriate container image
-func getImage(backend, configImage string) string {
-	// if configImage != "" && configImage != "null" {
-	// 	return configImage
-	// }
-
+func getImage(backend string) string {
 	// Default images per backend
 	switch backend {
 	case "sglang":

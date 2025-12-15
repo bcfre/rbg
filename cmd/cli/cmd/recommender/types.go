@@ -98,7 +98,6 @@ type WorkerParams struct {
 	KVCacheQuantMode             string  `yaml:"kvcache_quant_mode"`
 	FMHAQuantMode                string  `yaml:"fmha_quant_mode"`
 	CommQuantMode                string  `yaml:"comm_quant_mode"`
-	Memory                       float64 `yaml:"memory"`
 	KVCacheDtype                 string  `yaml:"kv_cache_dtype"`
 	KVCacheFreeGPUMemoryFraction float64 `yaml:"kv_cache_free_gpu_memory_fraction"`
 }
@@ -163,7 +162,6 @@ func GetWorkerParams(params map[string]interface{}) WorkerParams {
 		KVCacheQuantMode:             getStringFromMap(params, "kvcache_quant_mode"),
 		FMHAQuantMode:                getStringFromMap(params, "fmha_quant_mode"),
 		CommQuantMode:                getStringFromMap(params, "comm_quant_mode"),
-		Memory:                       getFloat64FromMap(params, "memory"),
 		KVCacheDtype:                 getStringFromMap(params, "kv_cache_dtype"),
 		KVCacheFreeGPUMemoryFraction: getFloat64FromMap(params, "kv_cache_free_gpu_memory_fraction"),
 	}
