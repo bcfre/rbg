@@ -1,24 +1,9 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package recommender
 
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
@@ -35,7 +20,7 @@ func NewRecommenderCmd() *cobra.Command {
 		TTFT:         1000,
 		TPOT:         50,
 		DatabaseMode: "SILICON",
-		SaveDir:      "./rbg-recommender-output",
+		SaveDir:      "/tmp/rbg-recommender-output",
 		ExtraArgs:    make(map[string]string),
 	}
 
@@ -48,7 +33,7 @@ disaggregated mode and aggregated mode deployments.
 
 Example:
   rbgctl recommender --model QWEN3_32B --system h200_sxm --total-gpus 8 \
-    --backend sglang --isl 5000 --osl 1000 --ttft 1000 --tpot 10
+    --backend sglang --isl 4000 --osl 1000 --ttft 1000 --tpot 30 --save-dir /tmp/rbg-recommender-output
 
 This will:
   1. Check if aiconfigurator is installed
@@ -74,11 +59,10 @@ This will:
 	cmd.Flags().IntVar(&config.OSL, "osl", 1000, "Output sequence length")
 	cmd.Flags().IntVar(&config.Prefix, "prefix", 0, "Prefix cache length")
 	cmd.Flags().Float64Var(&config.TTFT, "ttft", 1000, "Time to first token in milliseconds")
-	cmd.Flags().Float64Var(&config.TPOT, "tpot", 50, "Time per output token in milliseconds")
+	cmd.Flags().Float64Var(&config.TPOT, "tpot", 30, "Time per output token in milliseconds")
 	cmd.Flags().Float64Var(&config.RequestLatency, "request-latency", 0, "End-to-end request latency target in milliseconds")
 	cmd.Flags().StringVar(&config.DatabaseMode, "database-mode", "SILICON", "Database mode (SILICON, HYBRID, EMPIRICAL, SOL)")
 	cmd.Flags().StringVar(&config.SaveDir, "save-dir", "./rbg-recommender-output", "Directory to save results")
-	cmd.Flags().BoolVar(&config.Debug, "debug", false, "Enable debug mode")
 
 	// Mark required flags
 	cmd.MarkFlagRequired("model")
@@ -90,45 +74,44 @@ This will:
 
 // runRecommender executes the main recommender workflow
 func runRecommender(config *TaskConfig) error {
-	fmt.Println("=== RBG Deployment Recommender ===")
+	klog.Info("=== RBG Deployment Recommender ===")
 
 	// Step 1: Validate configuration
+	klog.V(2).Info("Validating configuration...")
 	if err := validateConfig(config); err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
+	klog.V(2).Info("Configuration validated successfully")
 
 	// Step 2: Check aiconfigurator availability
-	fmt.Println("Checking dependencies...")
+	klog.Info("Checking dependencies...")
 	if err := CheckAIConfiguratorAvailability(); err != nil {
 		return err
 	}
-	fmt.Println()
 
 	// Step 3: Execute aiconfigurator
 	if err := ExecuteAIConfigurator(config); err != nil {
 		return err
 	}
-	fmt.Println()
 
 	// Step 4: Locate output directory
-	fmt.Println("Locating generated configurations...")
+	klog.Info("Locating generated configurations...")
 	outputDir, err := LocateOutputDirectory(config)
 	if err != nil {
 		return err
 	}
 	klog.V(1).Infof("Using output directory: %s", outputDir)
-	fmt.Println()
 
 	// Step 5: Parse generator configurations
-	fmt.Println("Parsing AI Configurator output...")
+	klog.Info("Parsing AI Configurator output...")
 	aggConfig, disaggConfig, err := ParseGeneratorConfigs(outputDir)
 	if err != nil {
 		return err
 	}
-	fmt.Println()
+	klog.V(2).Info("Parsing completed successfully")
 
 	// Step 6: Generate RBG YAML files
-	fmt.Println("Generating RBG deployment YAMLs...")
+	klog.Info("Generating RBG deployment YAMLs...")
 
 	// Create deployment plans
 	disaggPlan := &DeploymentPlan{
@@ -158,8 +141,6 @@ func runRecommender(config *TaskConfig) error {
 		return fmt.Errorf("failed to generate aggregated mode YAML: %w", err)
 	}
 
-	fmt.Println()
-
 	// Step 7: Display results
 	displayResults(config, disaggPlan, aggPlan, disaggConfig, aggConfig)
 
@@ -168,10 +149,10 @@ func runRecommender(config *TaskConfig) error {
 
 // validateConfig validates the TaskConfig
 func validateConfig(config *TaskConfig) error {
-	if config.ModelName == "" {
+	if strings.TrimSpace(config.ModelName) == "" {
 		return fmt.Errorf("--model is required")
 	}
-	if config.SystemName == "" {
+	if strings.TrimSpace(config.SystemName) == "" {
 		return fmt.Errorf("--system is required")
 	}
 	if config.TotalGPUs <= 0 {
@@ -202,13 +183,13 @@ func validateConfig(config *TaskConfig) error {
 
 // displayResults shows the generated deployment plans to the user
 func displayResults(config *TaskConfig, disaggPlan, aggPlan *DeploymentPlan, disaggConfig, aggConfig *GeneratorConfig) {
-	fmt.Println("✓ Successfully generated 2 deployment recommendations:")
-	fmt.Println()
+	klog.Info("✓ Successfully generated 2 deployment recommendations:")
+	klog.Info("")
 
 	// Disaggregated mode summary
-	fmt.Println("Plan 1: Prefill-Decode Disaggregated Mode")
-	fmt.Printf("  File: %s\n", disaggPlan.OutputPath)
-	fmt.Println("  Configuration:")
+	klog.Info("Plan 1: Prefill-Decode Disaggregated Mode")
+	klog.Infof("  File: %s", disaggPlan.OutputPath)
+	klog.Info("  Configuration:")
 
 	prefillParams := GetWorkerParams(disaggConfig.Params.Prefill)
 	decodeParams := GetWorkerParams(disaggConfig.Params.Decode)
@@ -216,33 +197,33 @@ func displayResults(config *TaskConfig, disaggPlan, aggPlan *DeploymentPlan, dis
 	prefillTotalGPUs := disaggConfig.Workers.PrefillWorkers * prefillParams.TensorParallelSize
 	decodeTotalGPUs := disaggConfig.Workers.DecodeWorkers * decodeParams.TensorParallelSize
 
-	fmt.Printf("    - Prefill Workers: %d (each using %d GPUs)\n",
+	klog.Infof("    - Prefill Workers: %d (each using %d GPUs)",
 		disaggConfig.Workers.PrefillWorkers, prefillParams.TensorParallelSize)
-	fmt.Printf("    - Decode Workers: %d (each using %d GPUs)\n",
+	klog.Infof("    - Decode Workers: %d (each using %d GPUs)",
 		disaggConfig.Workers.DecodeWorkers, decodeParams.TensorParallelSize)
-	fmt.Printf("    - Total GPU Usage: %d\n", prefillTotalGPUs+decodeTotalGPUs)
-	fmt.Println()
+	klog.Infof("    - Total GPU Usage: %d", prefillTotalGPUs+decodeTotalGPUs)
+	klog.Info("")
 
 	// Aggregated mode summary
-	fmt.Println("Plan 2: Aggregated Mode")
-	fmt.Printf("  File: %s\n", aggPlan.OutputPath)
-	fmt.Println("  Configuration:")
+	klog.Info("Plan 2: Aggregated Mode")
+	klog.Infof("  File: %s", aggPlan.OutputPath)
+	klog.Info("  Configuration:")
 
 	aggParams := GetWorkerParams(aggConfig.Params.Agg)
 	aggTotalGPUs := aggConfig.Workers.AggWorkers * aggParams.TensorParallelSize
 
-	fmt.Printf("    - Workers: %d (each using %d GPUs)\n",
+	klog.Infof("    - Workers: %d (each using %d GPUs)",
 		aggConfig.Workers.AggWorkers, aggParams.TensorParallelSize)
-	fmt.Printf("    - Total GPU Usage: %d\n", aggTotalGPUs)
-	fmt.Println()
+	klog.Infof("    - Total GPU Usage: %d", aggTotalGPUs)
+	klog.Info("")
 
 	// Deployment instructions
-	fmt.Println("To deploy, run:")
-	fmt.Printf("  kubectl apply -f %s\n", disaggPlan.OutputPath)
-	fmt.Println("or")
-	fmt.Printf("  kubectl apply -f %s\n", aggPlan.OutputPath)
-	fmt.Println()
-	fmt.Println("Note: Ensure the 'llm-model' PVC exists in your cluster before deploying.")
+	klog.Info("To deploy, run:")
+	klog.Infof("  kubectl apply -f %s", disaggPlan.OutputPath)
+	klog.Info("or")
+	klog.Infof("  kubectl apply -f %s", aggPlan.OutputPath)
+	klog.Info("")
+	klog.Info("Note: Ensure the 'llm-model' PVC exists in your cluster before deploying.")
 }
 
 // normalizeModelName converts model name to a valid Kubernetes resource name

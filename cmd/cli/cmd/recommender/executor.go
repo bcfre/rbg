@@ -1,19 +1,3 @@
-/*
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package recommender
 
 import (
@@ -25,8 +9,36 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// BuildAIConfiguratorCommand constructs the aiconfigurator CLI command from TaskConfig
-func BuildAIConfiguratorCommand(config *TaskConfig) []string {
+// ExecuteAIConfigurator runs the aiconfigurator command with the given configuration
+func ExecuteAIConfigurator(config *TaskConfig) error {
+	args := buildAIConfiguratorCommand(config)
+
+	klog.V(2).Infof("Executing aiconfigurator with args: %v", args)
+
+	cmd := exec.Command("aiconfigurator", args...)
+
+	// Set output to stdout/stderr for real-time feedback
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if config.Debug {
+		klog.Info("=== Executing aiconfigurator command ===")
+		klog.Infof("aiconfigurator %s", joinArgs(args))
+		klog.Info("========================================")
+	}
+
+	klog.Info("Running AI Configurator optimization... This may take a few minutes.")
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("aiconfigurator execution failed: %w\nPlease check the error output above", err)
+	}
+
+	klog.Info("✓ AI Configurator optimization completed successfully")
+	return nil
+}
+
+// buildAIConfiguratorCommand constructs the aiconfigurator CLI command from TaskConfig
+func buildAIConfiguratorCommand(config *TaskConfig) []string {
 	args := []string{"cli", "default"}
 
 	// Required parameters
@@ -72,34 +84,6 @@ func BuildAIConfiguratorCommand(config *TaskConfig) []string {
 	}
 
 	return args
-}
-
-// ExecuteAIConfigurator runs the aiconfigurator command with the given configuration
-func ExecuteAIConfigurator(config *TaskConfig) error {
-	args := BuildAIConfiguratorCommand(config)
-
-	klog.V(2).Infof("Executing aiconfigurator with args: %v", args)
-
-	cmd := exec.Command("aiconfigurator", args...)
-
-	// Set output to stdout/stderr for real-time feedback
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if config.Debug {
-		fmt.Printf("\n=== Executing aiconfigurator command ===\n")
-		fmt.Printf("aiconfigurator %s\n", joinArgs(args))
-		fmt.Printf("========================================\n\n")
-	}
-
-	fmt.Println("Running AI Configurator optimization... This may take a few minutes.")
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("aiconfigurator execution failed: %w\nPlease check the error output above", err)
-	}
-
-	fmt.Println("✓ AI Configurator optimization completed successfully")
-	return nil
 }
 
 // joinArgs joins command arguments with proper quoting
