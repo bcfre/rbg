@@ -107,22 +107,35 @@ func buildRouterRoleSpec(baseName, image, modelPath, backend string, plan *Deplo
 		klog.Fatalf("Router role configuration for backend %s not implemented", backend)
 	}
 
+	// Build command with dynamic prefill and decode endpoints
 	command := []string{
 		"python3",
 		"-m",
 		"sglang_router.launch_router",
 		"--pd-disaggregation",
-		"--prefill",
-		// todo：改成多个角色，例如 --prefill-0, --prefill-1, --prefill-2
-		fmt.Sprintf("http://%s-prefill-0.s-%s-prefill:8000", baseName, baseName),
-		"--decode",
-		// todd: 根据部署的decode副本数，改成多个
-		fmt.Sprintf("http://%s-decode-0.s-%s-decode:8000", baseName, baseName),
+	}
+
+	// Add all prefill worker endpoints
+	prefillReplicas := plan.Config.Workers.PrefillWorkers
+	command = append(command, "--prefill")
+	for i := 0; i < prefillReplicas; i++ {
+		command = append(command, fmt.Sprintf("http://%s-prefill-%d.s-%s-prefill:8000", baseName, i, baseName))
+	}
+
+	// Add all decode worker endpoints
+	command = append(command, "--decode")
+	decodeReplicas := plan.Config.Workers.DecodeWorkers
+	for i := 0; i < decodeReplicas; i++ {
+		command = append(command, fmt.Sprintf("http://%s-decode-%d.s-%s-decode:8000", baseName, i, baseName))
+	}
+
+	// Add common parameters
+	command = append(command,
 		"--host",
 		"0.0.0.0",
 		"--port",
 		"8000",
-	}
+	)
 
 	podTemplate := applycorev1.PodTemplateSpec().
 		WithSpec(applycorev1.PodSpec().
