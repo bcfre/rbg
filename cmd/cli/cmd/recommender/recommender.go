@@ -223,7 +223,7 @@ func displayResults(config *TaskConfig, disaggPlan, aggPlan *DeploymentPlan, dis
 	klog.Info("or")
 	klog.Infof("  kubectl apply -f %s", aggPlan.OutputPath)
 	klog.Info("")
-	klog.Info("Note: Ensure the 'llm-model' PVC exists in your cluster before deploying.")
+	klog.Infof("Note: Ensure the '%s' PVC exists in your cluster before deploying.", normalizeModelName(config.ModelName))
 }
 
 // normalizeModelName converts model name to a valid Kubernetes resource name

@@ -64,9 +64,9 @@ func renderDisaggYAML(plan *DeploymentPlan) (string, error) {
 		WithAPIVersion(gkv.GroupVersion().String()).
 		WithSpec(applyconfiguration.RoleBasedGroupSpec().
 			WithRoles(
-				buildRouterRoleSpec(baseName, image, plan.BackendName),
-				buildPrefillRoleSpec(image, modelPath, plan.BackendName, config.Workers.PrefillWorkers, prefillParams),
-				buildDecodeRoleSpec(image, modelPath, plan.BackendName, config.Workers.DecodeWorkers, decodeParams),
+				buildRouterRoleSpec(baseName, image, modelPath, plan.BackendName, plan),
+				buildPrefillRoleSpec(image, modelPath, plan.BackendName, config.Workers.PrefillWorkers, prefillParams, plan),
+				buildDecodeRoleSpec(image, modelPath, plan.BackendName, config.Workers.DecodeWorkers, decodeParams, plan),
 			))
 
 	// Build Service
@@ -92,7 +92,7 @@ func renderAggYAML(plan *DeploymentPlan) (string, error) {
 		WithAPIVersion(gkv.GroupVersion().String()).
 		WithSpec(applyconfiguration.RoleBasedGroupSpec().
 			WithRoles(
-				buildWorkerRoleSpec(image, modelPath, plan.BackendName, config.Workers.AggWorkers, aggParams),
+				buildWorkerRoleSpec(image, modelPath, plan.BackendName, config.Workers.AggWorkers, aggParams, plan),
 			))
 
 	// Build Service
@@ -102,7 +102,7 @@ func renderAggYAML(plan *DeploymentPlan) (string, error) {
 }
 
 // buildRouterRoleSpec creates the router role spec using builder pattern
-func buildRouterRoleSpec(baseName, image, backend string) *applyconfiguration.RoleSpecApplyConfiguration {
+func buildRouterRoleSpec(baseName, image, modelPath, backend string, plan *DeploymentPlan) *applyconfiguration.RoleSpecApplyConfiguration {
 	if backend != "sglang" {
 		klog.Fatalf("Router role configuration for backend %s not implemented", backend)
 	}
@@ -113,8 +113,10 @@ func buildRouterRoleSpec(baseName, image, backend string) *applyconfiguration.Ro
 		"sglang_router.launch_router",
 		"--pd-disaggregation",
 		"--prefill",
+		// todo：改成多个角色，例如 --prefill-0, --prefill-1, --prefill-2
 		fmt.Sprintf("http://%s-prefill-0.s-%s-prefill:8000", baseName, baseName),
 		"--decode",
+		// todd: 根据部署的decode副本数，改成多个
 		fmt.Sprintf("http://%s-decode-0.s-%s-decode:8000", baseName, baseName),
 		"--host",
 		"0.0.0.0",
@@ -128,17 +130,17 @@ func buildRouterRoleSpec(baseName, image, backend string) *applyconfiguration.Ro
 				applycorev1.Volume().
 					WithName("model").
 					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
-						WithClaimName("llm-model")),
+						WithClaimName(normalizeModelName(plan.ModelName))),
 			).
 			WithContainers(
 				applycorev1.Container().
-					WithName("router").
+					WithName("schedule").
 					WithImage(image).
 					WithCommand(command...).
 					WithVolumeMounts(
 						applycorev1.VolumeMount().
 							WithName("model").
-							WithMountPath("/models/"),
+							WithMountPath(modelPath),
 					),
 			))
 
@@ -149,7 +151,7 @@ func buildRouterRoleSpec(baseName, image, backend string) *applyconfiguration.Ro
 }
 
 // buildPrefillRoleSpec creates the prefill role spec using builder pattern
-func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams, plan *DeploymentPlan) *applyconfiguration.RoleSpecApplyConfiguration {
 	shmSize := resource.MustParse("30Gi")
 	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildPrefillCommand(backend, modelPath, params)
@@ -160,7 +162,7 @@ func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params
 				applycorev1.Volume().
 					WithName("model").
 					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
-						WithClaimName("llm-model")),
+						WithClaimName(normalizeModelName(plan.ModelName))),
 				applycorev1.Volume().
 					WithName("shm").
 					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
@@ -181,7 +183,7 @@ func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params
 					).
 					WithCommand(command...).
 					WithPorts(
-						applycorev1.ContainerPort().WithContainerPort(8000),
+						applycorev1.ContainerPort().WithContainerPort(8000).WithName("http"),
 					).
 					WithReadinessProbe(applycorev1.Probe().
 						WithInitialDelaySeconds(30).
@@ -196,7 +198,7 @@ func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params
 							"nvidia.com/gpu": gpuQuantity,
 						})).
 					WithVolumeMounts(
-						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("model").WithMountPath(modelPath),
 						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
 					),
 			))
@@ -208,7 +210,7 @@ func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params
 }
 
 // buildDecodeRoleSpec creates the decode role spec using builder pattern
-func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams, plan *DeploymentPlan) *applyconfiguration.RoleSpecApplyConfiguration {
 	shmSize := resource.MustParse("30Gi")
 	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildDecodeCommand(backend, modelPath, params)
@@ -219,7 +221,7 @@ func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params 
 				applycorev1.Volume().
 					WithName("model").
 					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
-						WithClaimName("llm-model")),
+						WithClaimName(normalizeModelName(plan.ModelName))),
 				applycorev1.Volume().
 					WithName("shm").
 					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
@@ -240,7 +242,7 @@ func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params 
 					).
 					WithCommand(command...).
 					WithPorts(
-						applycorev1.ContainerPort().WithContainerPort(8000),
+						applycorev1.ContainerPort().WithContainerPort(8000).WithName("http"),
 					).
 					WithReadinessProbe(applycorev1.Probe().
 						WithInitialDelaySeconds(30).
@@ -255,7 +257,7 @@ func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params 
 							"nvidia.com/gpu": gpuQuantity,
 						})).
 					WithVolumeMounts(
-						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("model").WithMountPath(modelPath),
 						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
 					),
 			))
@@ -267,7 +269,7 @@ func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params 
 }
 
 // buildWorkerRoleSpec creates the worker role spec for aggregated mode using builder pattern
-func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams) *applyconfiguration.RoleSpecApplyConfiguration {
+func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params WorkerParams, plan *DeploymentPlan) *applyconfiguration.RoleSpecApplyConfiguration {
 	gpuQuantity := resource.MustParse(fmt.Sprintf("%d", params.TensorParallelSize))
 	command := buildAggCommand(backend, modelPath, params)
 
@@ -277,7 +279,7 @@ func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params 
 				applycorev1.Volume().
 					WithName("model").
 					WithPersistentVolumeClaim(applycorev1.PersistentVolumeClaimVolumeSource().
-						WithClaimName("llm-model")),
+						WithClaimName(normalizeModelName(plan.ModelName))),
 				applycorev1.Volume().
 					WithName("shm").
 					WithEmptyDir(applycorev1.EmptyDirVolumeSource().
@@ -296,7 +298,7 @@ func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params 
 					).
 					WithCommand(command...).
 					WithPorts(
-						applycorev1.ContainerPort().WithContainerPort(8000),
+						applycorev1.ContainerPort().WithContainerPort(8000).WithName("http"),
 					).
 					WithReadinessProbe(applycorev1.Probe().
 						WithInitialDelaySeconds(30).
@@ -311,7 +313,7 @@ func buildWorkerRoleSpec(image, modelPath, backend string, replicas int, params 
 							"nvidia.com/gpu": gpuQuantity,
 						})).
 					WithVolumeMounts(
-						applycorev1.VolumeMount().WithName("model").WithMountPath("/models/"),
+						applycorev1.VolumeMount().WithName("model").WithMountPath(modelPath),
 						applycorev1.VolumeMount().WithName("shm").WithMountPath("/dev/shm"),
 					),
 			))
