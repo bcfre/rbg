@@ -87,19 +87,11 @@ type ParamsConfig struct {
 
 // WorkerParams represents the parameters for a single worker type
 type WorkerParams struct {
-	TensorParallelSize           int     `yaml:"tensor_parallel_size"`
-	PipelineParallelSize         int     `yaml:"pipeline_parallel_size"`
-	DataParallelSize             int     `yaml:"data_parallel_size"`
-	MoETensorParallelSize        int     `yaml:"moe_tensor_parallel_size"`
-	MoEExpertParallelSize        int     `yaml:"moe_expert_parallel_size"`
-	MaxBatchSize                 int     `yaml:"max_batch_size"`
-	GemmQuantMode                string  `yaml:"gemm_quant_mode"`
-	MoeQuantMode                 string  `yaml:"moe_quant_mode"`
-	KVCacheQuantMode             string  `yaml:"kvcache_quant_mode"`
-	FMHAQuantMode                string  `yaml:"fmha_quant_mode"`
-	CommQuantMode                string  `yaml:"comm_quant_mode"`
-	KVCacheDtype                 string  `yaml:"kv_cache_dtype"`
-	KVCacheFreeGPUMemoryFraction float64 `yaml:"kv_cache_free_gpu_memory_fraction"`
+	TensorParallelSize    int `yaml:"tensor_parallel_size"`
+	PipelineParallelSize  int `yaml:"pipeline_parallel_size"`
+	DataParallelSize      int `yaml:"data_parallel_size"`
+	MoETensorParallelSize int `yaml:"moe_tensor_parallel_size"`
+	MoEExpertParallelSize int `yaml:"moe_expert_parallel_size"`
 }
 
 // DeploymentPlan represents a complete deployment plan
@@ -151,18 +143,10 @@ func getStringFromMap(m map[string]interface{}, key string) string {
 // GetWorkerParams extracts WorkerParams from a params map
 func GetWorkerParams(params map[string]interface{}) WorkerParams {
 	return WorkerParams{
-		TensorParallelSize:           getIntFromMap(params, "tensor_parallel_size"),
-		PipelineParallelSize:         getIntFromMap(params, "pipeline_parallel_size"),
-		DataParallelSize:             getIntFromMap(params, "data_parallel_size"),
-		MoETensorParallelSize:        getIntFromMap(params, "moe_tensor_parallel_size"),
-		MoEExpertParallelSize:        getIntFromMap(params, "moe_expert_parallel_size"),
-		MaxBatchSize:                 getIntFromMap(params, "max_batch_size"),
-		GemmQuantMode:                getStringFromMap(params, "gemm_quant_mode"),
-		MoeQuantMode:                 getStringFromMap(params, "moe_quant_mode"),
-		KVCacheQuantMode:             getStringFromMap(params, "kvcache_quant_mode"),
-		FMHAQuantMode:                getStringFromMap(params, "fmha_quant_mode"),
-		CommQuantMode:                getStringFromMap(params, "comm_quant_mode"),
-		KVCacheDtype:                 getStringFromMap(params, "kv_cache_dtype"),
-		KVCacheFreeGPUMemoryFraction: getFloat64FromMap(params, "kv_cache_free_gpu_memory_fraction"),
+		TensorParallelSize:    getIntFromMap(params, "tensor_parallel_size"),
+		PipelineParallelSize:  getIntFromMap(params, "pipeline_parallel_size"),
+		DataParallelSize:      getIntFromMap(params, "data_parallel_size"),
+		MoETensorParallelSize: getIntFromMap(params, "moe_tensor_parallel_size"),
+		MoEExpertParallelSize: getIntFromMap(params, "moe_expert_parallel_size"),
 	}
 }

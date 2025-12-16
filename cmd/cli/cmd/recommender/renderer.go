@@ -117,15 +117,15 @@ func buildRouterRoleSpec(baseName, image, modelPath, backend string, plan *Deplo
 
 	// Add all prefill worker endpoints
 	prefillReplicas := plan.Config.Workers.PrefillWorkers
-	command = append(command, "--prefill")
 	for i := 0; i < prefillReplicas; i++ {
+		command = append(command, "--prefill")
 		command = append(command, fmt.Sprintf("http://%s-prefill-%d.s-%s-prefill:8000", baseName, i, baseName))
 	}
 
 	// Add all decode worker endpoints
-	command = append(command, "--decode")
 	decodeReplicas := plan.Config.Workers.DecodeWorkers
 	for i := 0; i < decodeReplicas; i++ {
+		command = append(command, "--decode")
 		command = append(command, fmt.Sprintf("http://%s-decode-%d.s-%s-decode:8000", baseName, i, baseName))
 	}
 
@@ -159,6 +159,7 @@ func buildRouterRoleSpec(baseName, image, modelPath, backend string, plan *Deplo
 
 	return applyconfiguration.RoleSpec().
 		WithName("router").
+		WithDependencies([]string{"prefill", "decode"}...).
 		WithReplicas(1).
 		WithTemplate(podTemplate)
 }
@@ -374,8 +375,6 @@ func buildPrefillCommand(backend, modelPath string, params WorkerParams) []strin
 			"prefill",
 			"--port",
 			"8000",
-			"--disaggregation-bootstrap-port",
-			"34000",
 			"--host",
 			"$(POD_IP)",
 		}
@@ -393,16 +392,6 @@ func buildPrefillCommand(backend, modelPath string, params WorkerParams) []strin
 		// Add data-parallel-size
 		if params.DataParallelSize > 0 {
 			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
-		}
-
-		// Add kv-cache-dtype
-		if params.KVCacheDtype != "" {
-			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
-		}
-
-		// Add max-running-requests (mapped from MaxBatchSize)
-		if params.MaxBatchSize > 0 {
-			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
 		}
 
 		// Add expert-parallel-size
@@ -454,16 +443,6 @@ func buildDecodeCommand(backend, modelPath string, params WorkerParams) []string
 			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
 		}
 
-		// Add kv-cache-dtype
-		if params.KVCacheDtype != "" {
-			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
-		}
-
-		// Add max-running-requests (mapped from MaxBatchSize)
-		if params.MaxBatchSize > 0 {
-			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
-		}
-
 		// Add expert-parallel-size
 		if params.MoEExpertParallelSize > 0 {
 			args = append(args, "--expert-parallel-size", fmt.Sprintf("%d", params.MoEExpertParallelSize))
@@ -472,11 +451,6 @@ func buildDecodeCommand(backend, modelPath string, params WorkerParams) []string
 		// Add moe-dense-tp-size
 		if params.MoETensorParallelSize > 0 {
 			args = append(args, "--moe-dense-tp-size", fmt.Sprintf("%d", params.MoETensorParallelSize))
-		}
-
-		// Add mem-fraction-static (for KV cache)
-		if params.KVCacheFreeGPUMemoryFraction > 0 {
-			args = append(args, "--mem-fraction-static", fmt.Sprintf("%.2f", params.KVCacheFreeGPUMemoryFraction))
 		}
 
 		return append([]string{"python3"}, args...)
@@ -515,16 +489,6 @@ func buildAggCommand(backend, modelPath string, params WorkerParams) []string {
 			args = append(args, "--data-parallel-size", fmt.Sprintf("%d", params.DataParallelSize))
 		}
 
-		// Add kv-cache-dtype
-		if params.KVCacheDtype != "" {
-			args = append(args, "--kv-cache-dtype", params.KVCacheDtype)
-		}
-
-		// Add max-running-requests (mapped from MaxBatchSize)
-		if params.MaxBatchSize > 0 {
-			args = append(args, "--max-running-requests", fmt.Sprintf("%d", params.MaxBatchSize))
-		}
-
 		// Add expert-parallel-size
 		if params.MoEExpertParallelSize > 0 {
 			args = append(args, "--expert-parallel-size", fmt.Sprintf("%d", params.MoEExpertParallelSize))
@@ -533,11 +497,6 @@ func buildAggCommand(backend, modelPath string, params WorkerParams) []string {
 		// Add moe-dense-tp-size (mapped from MoETensorParallelSize)
 		if params.MoETensorParallelSize > 0 {
 			args = append(args, "--moe-dense-tp-size", fmt.Sprintf("%d", params.MoETensorParallelSize))
-		}
-
-		// Add mem-fraction-static (for KV cache)
-		if params.KVCacheFreeGPUMemoryFraction > 0 {
-			args = append(args, "--mem-fraction-static", fmt.Sprintf("%.2f", params.KVCacheFreeGPUMemoryFraction))
 		}
 
 		return append([]string{"python3"}, args...)
