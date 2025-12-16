@@ -13,15 +13,28 @@ The `kubectl-rbg recommender` command integrates with [AI Configurator](https://
 
 2. **Verify installation**:
    ```bash
-   aiconfigurator --version
+   aiconfigurator version
+
+   # version >= 0.5.0
    ```
+3. **参考 [kubectl-rbg](doc/features/kubectl-rbg.md) 在本地安装kubectl-rbg插件:
+
+```shell
+# Download source code
+$ git clone https://github.com/sgl-project/rbg.git
+# Build locally
+$ make build-cli
+# Install
+$ chmod +x bin/kubectl-rbg
+$ sudo mv bin/kubectl-rbg /usr/local/bin/
+```
 
 ## Usage
 
 ### Basic Command
 
 ```bash
-kubectl-rbg recommender \
+kubectl rbg recommender \
   --model QWEN3_32B \
   --system h200_sxm \
   --total-gpus 8 \
@@ -42,11 +55,9 @@ kubectl-rbg recommender \
 
 #### Optional Flags
 
-- `--backend`: Inference backend (default: "sglang")
-  - Supported: sglang, vllm, trtllm
+- `--backend`: Inference backend (current only supported: "sglang")
 - `--hf-id`: HuggingFace model ID (e.g., "Qwen/Qwen2.5-7B")
 - `--decode-system`: GPU system for decode workers (defaults to --system)
-- `--backend-version`: Specific backend version to use
 - `--isl`: Input sequence length (default: 4000)
 - `--osl`: Output sequence length (default: 1000)
 - `--prefix`: Prefix cache length (default: 0)
@@ -56,7 +67,7 @@ kubectl-rbg recommender \
 - `--database-mode`: Performance database mode (default: "SILICON")
   - Options: SILICON, HYBRID, EMPIRICAL, SOL
 - `--save-dir`: Directory to save results (default: "./rbg-recommender-output")
-- `--debug`: Enable debug mode for detailed logging
+
 
 ## Workflow
 
@@ -157,17 +168,6 @@ Before deploying the generated YAML:
    kubectl get pods
    ```
 
-## Supported Models
-
-The command supports all models available in AI Configurator, including:
-
-- LLAMA2 series (7B, 13B, 70B)
-- LLAMA3.1 series (8B, 70B, 405B)
-- QWEN2.5 series (1.5B, 7B, 32B, 72B)
-- QWEN3 series (0.6B, 1.7B, 8B, 32B, 235B, 480B)
-- MoE models (Mixtral 8x7B, 8x22B)
-- DeepSeek V3
-- And more...
 
 ## Troubleshooting
 
@@ -202,38 +202,6 @@ Error: invalid system invalid_system, must be one of: h100_sxm, a100_sxm, b200_s
 
 **Solution**: Use one of the supported GPU system types.
 
-## Advanced Usage
-
-### Custom HuggingFace Model
-
-```bash
-kubectl-rbg recommender \
-  --model CUSTOM_MODEL \
-  --hf-id organization/model-name \
-  --system h200_sxm \
-  --total-gpus 8
-```
-
-### Different GPU Types for Prefill and Decode
-
-```bash
-kubectl-rbg recommender \
-  --model QWEN3_32B \
-  --system a100_sxm \
-  --decode-system h100_sxm \
-  --total-gpus 16
-```
-
-### Debug Mode
-
-```bash
-kubectl-rbg recommender \
-  --model QWEN3_32B \
-  --system h200_sxm \
-  --total-gpus 8 \
-  --debug
-```
-
 ## Architecture
 
 The recommender command consists of several modules:
@@ -245,6 +213,3 @@ The recommender command consists of several modules:
 - **renderer.go**: Renders RBG YAML templates
 - **recommender.go**: Main command orchestration
 
-## Contributing
-
-To add support for new backends or improve YAML templates, modify the renderer.go file and implement the appropriate command builders.

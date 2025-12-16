@@ -1,0 +1,83 @@
+apiVersion: workloads.x-k8s.io/v1alpha1
+kind: RoleBasedGroup
+metadata:
+  name: qwen3-32b-sglang-agg-07299
+  namespace: default
+spec:
+  roles:
+    - name: worker
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang.launch_server
+                - --model-path
+                - /models/QWEN3_32B/
+                - --enable-metrics
+                - --port
+                - "8000"
+                - --host
+                - $(POD_IP)
+                - --tensor-parallel-size
+                - "8"
+                - --pipeline-parallel-size
+                - "1"
+                - --data-parallel-size
+                - "1"
+                - --expert-parallel-size
+                - "1"
+                - --moe-dense-tp-size
+                - "1"
+              env:
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              image: registry.cn-beijing.aliyuncs.com/fluid-namespace/docker-hub-mirror:sglang-v0.5.5-erdma
+              name: sglang-worker
+              ports:
+                - containerPort: 8000
+                  name: http
+              readinessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                tcpSocket:
+                  port: 8000
+              resources:
+                limits:
+                  nvidia.com/gpu: "8"
+                requests:
+                  nvidia.com/gpu: "8"
+              volumeMounts:
+                - mountPath: /models/QWEN3_32B/
+                  name: model
+                - mountPath: /dev/shm
+                  name: shm
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: qwen3-32b
+            - emptyDir:
+                medium: Memory
+              name: shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: qwen3-32b-sglang-agg-07299
+  name: qwen3-32b-sglang-agg-07299
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: 8000
+      protocol: TCP
+      targetPort: 8000
+  selector:
+    rolebasedgroup.workloads.x-k8s.io/name: qwen3-32b-sglang-agg-07299
+    rolebasedgroup.workloads.x-k8s.io/role: worker
+  type: ClusterIP

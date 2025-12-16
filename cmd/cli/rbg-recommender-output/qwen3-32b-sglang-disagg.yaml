@@ -1,0 +1,187 @@
+apiVersion: workloads.x-k8s.io/v1alpha1
+kind: RoleBasedGroup
+metadata:
+  name: qwen3-32b-sglang-pd-2234a
+  namespace: default
+spec:
+  roles:
+    - dependencies:
+        - prefill
+        - decode
+      name: router
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang_router.launch_router
+                - --pd-disaggregation
+                - --prefill
+                - http://qwen3-32b-sglang-pd-2234a-prefill-0.s-qwen3-32b-sglang-pd-2234a-prefill:8000
+                - --prefill
+                - http://qwen3-32b-sglang-pd-2234a-prefill-1.s-qwen3-32b-sglang-pd-2234a-prefill:8000
+                - --prefill
+                - http://qwen3-32b-sglang-pd-2234a-prefill-2.s-qwen3-32b-sglang-pd-2234a-prefill:8000
+                - --prefill
+                - http://qwen3-32b-sglang-pd-2234a-prefill-3.s-qwen3-32b-sglang-pd-2234a-prefill:8000
+                - --decode
+                - http://qwen3-32b-sglang-pd-2234a-decode-0.s-qwen3-32b-sglang-pd-2234a-decode:8000
+                - --host
+                - 0.0.0.0
+                - --port
+                - "8000"
+              image: registry.cn-beijing.aliyuncs.com/fluid-namespace/docker-hub-mirror:sglang-v0.5.5-erdma
+              name: schedule
+              volumeMounts:
+                - mountPath: /models/QWEN3_32B/
+                  name: model
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: qwen3-32b
+    - name: prefill
+      replicas: 4
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang.launch_server
+                - --model-path
+                - /models/QWEN3_32B/
+                - --enable-metrics
+                - --disaggregation-mode
+                - prefill
+                - --port
+                - "8000"
+                - --host
+                - $(POD_IP)
+                - --tensor-parallel-size
+                - "1"
+                - --pipeline-parallel-size
+                - "1"
+                - --data-parallel-size
+                - "1"
+                - --expert-parallel-size
+                - "1"
+                - --moe-dense-tp-size
+                - "1"
+              env:
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              image: registry.cn-beijing.aliyuncs.com/fluid-namespace/docker-hub-mirror:sglang-v0.5.5-erdma
+              imagePullPolicy: Always
+              name: sglang-prefill
+              ports:
+                - containerPort: 8000
+                  name: http
+              readinessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                tcpSocket:
+                  port: 8000
+              resources:
+                limits:
+                  nvidia.com/gpu: "1"
+                requests:
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - mountPath: /models/QWEN3_32B/
+                  name: model
+                - mountPath: /dev/shm
+                  name: shm
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: qwen3-32b
+            - emptyDir:
+                medium: Memory
+                sizeLimit: 30Gi
+              name: shm
+    - name: decode
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - command:
+                - python3
+                - -m
+                - sglang.launch_server
+                - --model-path
+                - /models/QWEN3_32B/
+                - --enable-metrics
+                - --disaggregation-mode
+                - decode
+                - --port
+                - "8000"
+                - --host
+                - $(POD_IP)
+                - --tensor-parallel-size
+                - "1"
+                - --pipeline-parallel-size
+                - "1"
+                - --data-parallel-size
+                - "1"
+                - --expert-parallel-size
+                - "1"
+                - --moe-dense-tp-size
+                - "1"
+              env:
+                - name: POD_IP
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: status.podIP
+              image: registry.cn-beijing.aliyuncs.com/fluid-namespace/docker-hub-mirror:sglang-v0.5.5-erdma
+              imagePullPolicy: Always
+              name: sglang-decode
+              ports:
+                - containerPort: 8000
+                  name: http
+              readinessProbe:
+                initialDelaySeconds: 30
+                periodSeconds: 10
+                tcpSocket:
+                  port: 8000
+              resources:
+                limits:
+                  nvidia.com/gpu: "1"
+                  # aliyun/erdma: 1
+                requests:
+                  nvidia.com/gpu: "1"
+                  # aliyun/erdma: 1
+              volumeMounts:
+                - mountPath: /models/QWEN3_32B/
+                  name: model
+                - mountPath: /dev/shm
+                  name: shm
+          volumes:
+            - name: model
+              persistentVolumeClaim:
+                claimName: qwen3-32b
+            - emptyDir:
+                medium: Memory
+                sizeLimit: 30Gi
+              name: shm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: qwen3-32b-sglang-pd-2234a
+  name: qwen3-32b-sglang-pd-2234a
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: 8000
+      protocol: TCP
+      targetPort: 8000
+  selector:
+    rolebasedgroup.workloads.x-k8s.io/name: qwen3-32b-sglang-pd-2234a
+    rolebasedgroup.workloads.x-k8s.io/role: router
+  type: ClusterIP

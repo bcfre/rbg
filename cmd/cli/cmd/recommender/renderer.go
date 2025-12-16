@@ -207,9 +207,11 @@ func buildPrefillRoleSpec(image, modelPath, backend string, replicas int, params
 					WithResources(applycorev1.ResourceRequirements().
 						WithLimits(corev1.ResourceList{
 							"nvidia.com/gpu": gpuQuantity,
+							// "rdma/hca":       resource.MustParse("1"),
 						}).
 						WithRequests(corev1.ResourceList{
 							"nvidia.com/gpu": gpuQuantity,
+							// "rdma/hca":       resource.MustParse("1"),
 						})).
 					WithVolumeMounts(
 						applycorev1.VolumeMount().WithName("model").WithMountPath(modelPath),
@@ -266,9 +268,11 @@ func buildDecodeRoleSpec(image, modelPath, backend string, replicas int, params 
 					WithResources(applycorev1.ResourceRequirements().
 						WithLimits(corev1.ResourceList{
 							"nvidia.com/gpu": gpuQuantity,
+							// "rdma/hca":       resource.MustParse("1"),
 						}).
 						WithRequests(corev1.ResourceList{
 							"nvidia.com/gpu": gpuQuantity,
+							// "rdma/hca":       resource.MustParse("1"),
 						})).
 					WithVolumeMounts(
 						applycorev1.VolumeMount().WithName("model").WithMountPath(modelPath),
