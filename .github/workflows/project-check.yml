@@ -56,6 +56,8 @@ jobs:
       - name: Code check
         run: |
           make fmt vet lint
+          which golangci-lint
+          golangci-lint --version
           find ./deploy/helm | grep Chart.yaml | xargs dirname | xargs helm lint
 
   build:
