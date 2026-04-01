@@ -35,12 +35,11 @@ import (
 
 func testOSSConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"storageSize": "100Gi",
-		"url":         "oss-cn-hangzhou.aliyuncs.com",
-		"bucket":      "test-bucket",
-		"subpath":     "models",
-		"akId":        "test-ak-id",
-		"akSecret":    "test-ak-secret",
+		"url":      "oss-cn-hangzhou.aliyuncs.com",
+		"bucket":   "test-bucket",
+		"subpath":  "models",
+		"akId":     "test-ak-id",
+		"akSecret": "test-ak-secret",
 	}
 }
 
@@ -52,20 +51,21 @@ func TestOSSStorage_Name(t *testing.T) {
 func TestOSSStorage_ConfigFields(t *testing.T) {
 	p := &OSSStorage{}
 	fields := p.ConfigFields()
-	require.Len(t, fields, 6)
+	require.Len(t, fields, 5)
 
 	fieldKeys := make([]string, len(fields))
 	for i, f := range fields {
 		fieldKeys[i] = f.Key
 	}
-	assert.Contains(t, fieldKeys, "storageSize")
 	assert.Contains(t, fieldKeys, "url")
 	assert.Contains(t, fieldKeys, "bucket")
 	assert.Contains(t, fieldKeys, "subpath")
 	assert.Contains(t, fieldKeys, "akId")
 	assert.Contains(t, fieldKeys, "akSecret")
+	// storageSize is not a config field, it's fixed at 1Ti
+	assert.NotContains(t, fieldKeys, "storageSize")
 
-	// Check required fields
+	// Check required fields (only subpath is optional)
 	for _, f := range fields {
 		if f.Key == "subpath" {
 			assert.False(t, f.Required, "subpath should be optional")
@@ -76,7 +76,7 @@ func TestOSSStorage_ConfigFields(t *testing.T) {
 }
 
 func TestOSSStorage_Init_MissingRequiredFields(t *testing.T) {
-	requiredFields := []string{"storageSize", "url", "bucket", "akId", "akSecret"}
+	requiredFields := []string{"url", "bucket", "akId", "akSecret"}
 
 	for _, field := range requiredFields {
 		t.Run("missing_"+field, func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestOSSStorage_Init_MissingRequiredFields(t *testing.T) {
 }
 
 func TestOSSStorage_Init_EmptyRequiredFields(t *testing.T) {
-	requiredFields := []string{"storageSize", "url", "bucket", "akId", "akSecret"}
+	requiredFields := []string{"url", "bucket", "akId", "akSecret"}
 
 	for _, field := range requiredFields {
 		t.Run("empty_"+field, func(t *testing.T) {
@@ -110,7 +110,8 @@ func TestOSSStorage_Init_OK(t *testing.T) {
 	p := &OSSStorage{}
 	err := p.Init(config)
 	require.NoError(t, err)
-	assert.Equal(t, "100Gi", p.storageSize)
+	// storageSize is fixed at 1Ti, not read from config
+	assert.Equal(t, "1Ti", p.storageSize)
 	assert.Equal(t, "oss-cn-hangzhou.aliyuncs.com", p.url)
 	assert.Equal(t, "test-bucket", p.bucket)
 	assert.Equal(t, "models", p.subpath)
@@ -125,6 +126,16 @@ func TestOSSStorage_Init_OK_WithoutSubpath(t *testing.T) {
 	err := p.Init(config)
 	require.NoError(t, err)
 	assert.Equal(t, "/", p.subpath)
+}
+
+func TestOSSStorage_Init_StorageSizeFixed(t *testing.T) {
+	// storageSize is fixed at 1Ti, even if specified in config it's ignored
+	config := testOSSConfig()
+	config["storageSize"] = "500Gi" // This should be ignored
+	p := &OSSStorage{}
+	err := p.Init(config)
+	require.NoError(t, err)
+	assert.Equal(t, "1Ti", p.storageSize, "storageSize should always be 1Ti")
 }
 
 func TestOSSStorage_MountPath(t *testing.T) {
@@ -629,7 +640,7 @@ func TestValidateConfig_OSS_UnknownField(t *testing.T) {
 func TestGetFields_OSS(t *testing.T) {
 	fields := GetFields("oss")
 	require.NotNil(t, fields)
-	assert.Len(t, fields, 6)
+	assert.Len(t, fields, 5) // storageSize is not a config field
 }
 
 func TestRegisteredNames_ContainsOSS(t *testing.T) {

@@ -40,6 +40,7 @@ const (
 	defaultMemoryRequest     = "2Gi"
 	defaultTask              = "text-to-text"
 	defaultAPIKey            = "rbg"
+	defaultAPIPort           = 8000
 	defaultMaxTimePerRun     = 15
 	defaultMaxRequestsPerRun = 100
 )
@@ -56,6 +57,7 @@ type BenchmarkOptions struct {
 
 	apiBackend   string
 	apiBase      string
+	apiPort      int
 	apiKey       string
 	apiModelName string
 
@@ -88,6 +90,7 @@ type BenchmarkConfig struct {
 
 	APIBackend   string `json:"apiBackend,omitempty"`
 	APIBase      string `json:"apiBase,omitempty"`
+	APIPort      *int   `json:"apiPort,omitempty"`
 	APIKey       string `json:"apiKey,omitempty"`
 	APIModelName string `json:"apiModelName,omitempty"`
 
@@ -131,6 +134,7 @@ func NewBenchmarkRunCmd(cf *genericclioptions.ConfigFlags) *cobra.Command {
 		cf:                cf,
 		task:              defaultTask,
 		apiKey:            defaultAPIKey,
+		apiPort:           defaultAPIPort,
 		maxTimePerRun:     defaultMaxTimePerRun,
 		maxRequestsPerRun: defaultMaxRequestsPerRun,
 		image:             defaultBenchmarkImage,
@@ -170,6 +174,7 @@ version management.`,
 
 	cmd.Flags().StringVar(&benchmarkOpts.apiBackend, "api-backend", benchmarkOpts.apiBackend, "API backend type (overrides auto-discovered value)")
 	cmd.Flags().StringVar(&benchmarkOpts.apiBase, "api-base", benchmarkOpts.apiBase, "Base URL for the model serving API (overrides auto-discovered value)")
+	cmd.Flags().IntVar(&benchmarkOpts.apiPort, "api-port", benchmarkOpts.apiPort, "Port for the model serving API (used when auto-generating api-base)")
 	cmd.Flags().StringVar(&benchmarkOpts.apiKey, "api-key", benchmarkOpts.apiKey, "API key used to call the model serving API")
 	cmd.Flags().StringVar(&benchmarkOpts.apiModelName, "api-model-name", benchmarkOpts.apiModelName, "Model name used by the backend (overrides auto-discovered value)")
 
@@ -252,7 +257,7 @@ func getConflictingFlags(cmd *cobra.Command) []string {
 	parameterFlags := []string{
 		"task", "max-time-per-run", "max-requests-per-run",
 		"traffic-scenario", "num-concurrency",
-		"api-backend", "api-base", "api-key", "api-model-name",
+		"api-backend", "api-base", "api-port", "api-key", "api-model-name",
 		"model-tokenizer",
 		"experiment-base-dir", "experiment-folder-name",
 		"image", "cpu-request", "cpu-limit", "memory-request", "memory-limit",
@@ -277,6 +282,7 @@ func applyConfigToOptions(cfg *BenchmarkConfig, cmd *cobra.Command) {
 	setIntSliceOpt(&benchmarkOpts.numConcurrency, cfg.NumConcurrency, "num-concurrency", cmd)
 	setStringOpt(&benchmarkOpts.apiBackend, cfg.APIBackend, "api-backend", cmd)
 	setStringOpt(&benchmarkOpts.apiBase, cfg.APIBase, "api-base", cmd)
+	setIntPtrOpt(&benchmarkOpts.apiPort, cfg.APIPort, "api-port", cmd)
 	setStringOpt(&benchmarkOpts.apiKey, cfg.APIKey, "api-key", cmd)
 	setStringOpt(&benchmarkOpts.apiModelName, cfg.APIModelName, "api-model-name", cmd)
 	setStringOpt(&benchmarkOpts.modelTokenizer, cfg.ModelTokenizer, "model-tokenizer", cmd)

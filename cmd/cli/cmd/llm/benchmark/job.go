@@ -78,7 +78,7 @@ func buildBenchmarkJob(namespace, rbgName string) (*batchv1.Job, error) {
 	}
 	apiBase := benchmarkOpts.apiBase
 	if apiBase == "" {
-		apiBase = fmt.Sprintf("http://%s.%s.svc.cluster.local:8080", rbgName, namespace)
+		apiBase = fmt.Sprintf("http://s-%s-inference.%s.svc.cluster.local:%d", rbgName, namespace, benchmarkOpts.apiPort)
 	}
 	apiModelName := benchmarkOpts.apiModelName
 	if apiModelName == "" {
@@ -170,6 +170,7 @@ func buildBenchmarkAnnotations() (map[string]string, error) {
 		NumConcurrency:       benchmarkOpts.numConcurrency,
 		APIBackend:           benchmarkOpts.apiBackend,
 		APIBase:              benchmarkOpts.apiBase,
+		APIPort:              &benchmarkOpts.apiPort,
 		APIKey:               "***",
 		APIModelName:         benchmarkOpts.apiModelName,
 		ModelTokenizer:       benchmarkOpts.modelTokenizer,

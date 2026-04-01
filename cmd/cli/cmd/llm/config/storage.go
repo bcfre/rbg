@@ -46,7 +46,6 @@ PVC configuration fields:
   - pvcName: name of the pre-existing PersistentVolumeClaim to bind to (required)
 
 OSS configuration fields:
-  - storageSize: storage size for the PV (e.g., 100Gi) (required)
   - url: OSS endpoint URL (e.g., oss-cn-hangzhou.aliyuncs.com) (required)
   - bucket: OSS bucket name (required)
   - subpath: subpath within the bucket (optional)
@@ -58,7 +57,7 @@ Examples:
   kubectl rbg llm config add-storage my-pvc --type pvc --config pvcName=model-pvc
 
   # Add an OSS storage with command-line flags
-  kubectl rbg llm config add-storage my-oss --type oss --config url=oss-cn-hangzhou.aliyuncs.com --config bucket=my-bucket --config storageSize=100Gi --config akId=MY_ACCESS_KEY_ID --config akSecret=MY_ACCESS_KEY_SECRET
+  kubectl rbg llm config add-storage my-oss --type oss --config url=oss-cn-hangzhou.aliyuncs.com --config bucket=my-bucket --config akId=MY_ACCESS_KEY_ID --config akSecret=MY_ACCESS_KEY_SECRET
 
   # Add storage interactively
   kubectl rbg llm config add-storage my-pvc -i`,

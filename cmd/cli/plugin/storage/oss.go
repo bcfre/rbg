@@ -56,7 +56,6 @@ func (o *OSSStorage) Name() string {
 // ConfigFields returns the config fields this plugin accepts
 func (o *OSSStorage) ConfigFields() []util.ConfigField {
 	return []util.ConfigField{
-		{Key: "storageSize", Description: "storage size for the PV (e.g., 100Gi)", Required: true},
 		{Key: "url", Description: "OSS endpoint URL (e.g., oss-cn-hangzhou.aliyuncs.com)", Required: true},
 		{Key: "bucket", Description: "OSS bucket name", Required: true},
 		{Key: "subpath", Description: "subpath within the bucket", Required: false},
@@ -69,9 +68,7 @@ func (o *OSSStorage) ConfigFields() []util.ConfigField {
 func (o *OSSStorage) Init(config map[string]interface{}) error {
 	var ok bool
 
-	if o.storageSize, ok = config["storageSize"].(string); !ok || o.storageSize == "" {
-		return fmt.Errorf("storageSize is required in storage config for oss type")
-	}
+	o.storageSize = "1Ti"
 	if o.url, ok = config["url"].(string); !ok || o.url == "" {
 		return fmt.Errorf("url is required in storage config for oss type")
 	}

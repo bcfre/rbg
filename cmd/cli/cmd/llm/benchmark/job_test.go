@@ -398,6 +398,7 @@ func TestBuildBenchmarkJob(t *testing.T) {
 		benchmarkOpts.apiBackend = ""
 		benchmarkOpts.apiBase = ""
 		benchmarkOpts.apiModelName = ""
+		benchmarkOpts.apiPort = 8080
 
 		job, err := buildBenchmarkJob("my-ns", "my-rbg")
 		require.NoError(t, err)
@@ -407,7 +408,8 @@ func TestBuildBenchmarkJob(t *testing.T) {
 		args := container.Args
 		argsStr := joinArgs(args)
 		assert.Contains(t, argsStr, "--api-backend sglang")
-		assert.Contains(t, argsStr, "--api-base http://my-rbg.my-ns.svc.cluster.local:8080")
+		// Default apiBase format: http://s-{rbgName}-inference.{namespace}.svc.cluster.local:{apiPort}
+		assert.Contains(t, argsStr, "--api-base http://s-my-rbg-inference.my-ns.svc.cluster.local:8080")
 		assert.Contains(t, argsStr, "--api-model-name my-rbg")
 	})
 

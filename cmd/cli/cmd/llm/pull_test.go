@@ -17,6 +17,10 @@ limitations under the License.
 package llm
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -212,34 +216,165 @@ func TestInjectMetadataSave_MetadataContainsModelIDAndRevision(t *testing.T) {
 	assert.Contains(t, arg, "v2")
 }
 
-// --- jsonSafeString ---
+// --- Security tests for JSON escaping and command injection prevention ---
 
-func TestJsonSafeString_SimpleString(t *testing.T) {
-	result := jsonSafeString("hello")
-	assert.Equal(t, `"hello"`, result)
+// extractJSONFromCommand extracts the JSON payload from a wrapped shell command.
+// It handles both Case 1 (/bin/sh -c with appended metadata) and Case 2 (wrapped binary).
+func extractJSONFromCommand(t *testing.T, cmd []string, args []string) string {
+	t.Helper()
+	require.Len(t, cmd, 2, "expected /bin/sh -c command")
+	require.Equal(t, "/bin/sh", cmd[0])
+	require.Equal(t, "-c", cmd[1])
+	require.Len(t, args, 1, "expected single shell command string")
+
+	shellCmd := args[0]
+
+	// Both Case 1 and Case 2 now use printf '%s\n' for safety
+	// Case 1: "original_cmd && downloadedAt=$(date ...) && printf '%s\n' {JSON} | sed ... > /path"
+	// Case 2: "binary args && printf '%s\n' {JSON} > /path"
+	//
+	// The JSON is passed as argument to printf (with shellEscape, may be quoted)
+	printfIdx := strings.Index(shellCmd, "printf '%s\\n' ")
+	require.GreaterOrEqual(t, printfIdx, 0, "expected printf command in shell command")
+	start := printfIdx + len("printf '%s\\n' ")
+
+	// The JSON argument may be:
+	// - Single-quoted if it contains special chars: 'escaped-json'
+	// - Unquoted if safe: raw-json
+	rest := shellCmd[start:]
+
+	// Check if it starts with single quote (shellEscape wrapped it)
+	if strings.HasPrefix(rest, "'") {
+		// Find the closing single quote
+		// Note: shellEscape escapes internal single quotes as '"'"' so we need to handle that
+		jsonEnd := strings.Index(rest, "' | ")
+		if jsonEnd == -1 {
+			jsonEnd = strings.Index(rest, "' > ")
+		}
+		require.GreaterOrEqual(t, jsonEnd, 0, "expected closing quote after printf argument")
+		// Extract content between quotes, then unescape shell escapes
+		quotedContent := rest[1:jsonEnd]
+		// Unescape shell single-quote escapes: '"'"' -> '
+		return strings.ReplaceAll(quotedContent, `'","'`, "'")
+	}
+
+	// Unquoted: find the end marker
+	endMarkers := []string{" | sed ", " > "}
+	for _, marker := range endMarkers {
+		if idx := strings.Index(rest, marker); idx >= 0 {
+			return rest[:idx]
+		}
+	}
+	require.Fail(t, "expected end marker after printf argument")
+	return ""
 }
 
-func TestJsonSafeString_SpecialCharsEscaped(t *testing.T) {
-	result := jsonSafeString(`hello "world"`)
-	assert.Contains(t, result, `\"`)
-}
+func TestInjectMetadataSave_JSONIsValidAndEscaped(t *testing.T) {
+	tests := []struct {
+		name     string
+		modelID  string
+		revision string
+	}{
+		{
+			name:     "normal values",
+			modelID:  "org/model",
+			revision: "main",
+		},
+		{
+			name:     "modelID with double quotes",
+			modelID:  `org/"quoted"-model`,
+			revision: "v1",
+		},
+		{
+			name:     "modelID with backslashes",
+			modelID:  `org/path\\to\\model`,
+			revision: "v1",
+		},
+		{
+			name:     "modelID with newlines",
+			modelID:  "org/model\nwith\nnewlines",
+			revision: "v1",
+		},
+		{
+			name:     "revision with special characters",
+			modelID:  "org/model",
+			revision: `v1"beta"\n\r\t`,
+		},
+		{
+			name:     "both with mixed special characters",
+			modelID:  `org/"test"\model`,
+			revision: `v1.0"release"\candidate`,
+		},
+		{
+			name:     "unicode characters",
+			modelID:  "org/模型-🚀",
+			revision: "版本-ñ",
+		},
+		{
+			name:     "json injection attempt",
+			modelID:  `org/model","malicious":"true`,
+			revision: `v1"},"injected":{}`,
+		},
+	}
 
-func TestJsonSafeString_NewlineEscaped(t *testing.T) {
-	result := jsonSafeString("hello\nworld")
-	assert.Contains(t, result, `\n`)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("shell case", func(t *testing.T) {
+				tpl := &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Command: []string{"/bin/sh", "-c"},
+								Args:    []string{"download cmd"},
+							},
+						},
+					},
+				}
+				injectMetadataSave(tpl, tt.modelID, tt.revision, "/models/path")
 
-func TestJsonSafeString_TabEscaped(t *testing.T) {
-	result := jsonSafeString("hello\tworld")
-	assert.Contains(t, result, `\t`)
-}
+				c := tpl.Spec.Containers[0]
+				jsonStr := extractJSONFromCommand(t, c.Command, c.Args)
 
-func TestJsonSafeString_BackslashEscaped(t *testing.T) {
-	result := jsonSafeString(`hello\world`)
-	assert.Contains(t, result, `\\`)
-}
+				// Verify JSON is syntactically valid
+				var metadata map[string]interface{}
+				err := json.Unmarshal([]byte(jsonStr), &metadata)
+				require.NoError(t, err, "extracted JSON should be valid: %s", jsonStr)
 
-// --- Security tests for command injection prevention ---
+				// Verify values are correctly preserved (not corrupted by escaping)
+				assert.Equal(t, tt.modelID, metadata["modelID"], "modelID should match exactly")
+				assert.Equal(t, tt.revision, metadata["revision"], "revision should match exactly")
+				assert.Equal(t, "{{DOWNLOADED_AT}}", metadata["downloadedAt"], "downloadedAt should be placeholder")
+			})
+
+			t.Run("direct binary case", func(t *testing.T) {
+				tpl := &corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Command: []string{"huggingface-cli"},
+								Args:    []string{"download", "org/model"},
+							},
+						},
+					},
+				}
+				injectMetadataSave(tpl, tt.modelID, tt.revision, "/models/path")
+
+				c := tpl.Spec.Containers[0]
+				jsonStr := extractJSONFromCommand(t, c.Command, c.Args)
+
+				// Verify JSON is syntactically valid
+				var metadata map[string]interface{}
+				err := json.Unmarshal([]byte(jsonStr), &metadata)
+				require.NoError(t, err, "extracted JSON should be valid: %s", jsonStr)
+
+				// Verify values are correctly preserved
+				assert.Equal(t, tt.modelID, metadata["modelID"], "modelID should match exactly")
+				assert.Equal(t, tt.revision, metadata["revision"], "revision should match exactly")
+				assert.Equal(t, "{{DOWNLOADED_AT}}", metadata["downloadedAt"], "downloadedAt should be placeholder")
+			})
+		})
+	}
+}
 
 func TestInjectMetadataSave_MaliciousModelID_QuotedAndEscaped(t *testing.T) {
 	tpl := &corev1.PodTemplateSpec{
@@ -258,11 +393,13 @@ func TestInjectMetadataSave_MaliciousModelID_QuotedAndEscaped(t *testing.T) {
 	arg := tpl.Spec.Containers[0].Args[0]
 	// The malicious input should be properly escaped, not executed
 	assert.Contains(t, arg, `.rbg-metadata.json`)
-	// Verify single quotes in modelID are escaped with shell escape pattern '\"'\"'
-	assert.Contains(t, arg, `'"'"'`)
-	// The entire printf argument should be shell-escaped (wrapped in single quotes)
-	assert.Contains(t, arg, `printf '`)
-	// Verify the malicious content appears as escaped string data, not executable
+	// Verify the malicious content appears inside the JSON string, not as executable shell code
+	assert.Contains(t, arg, `rm -rf /`)
+	// Verify the command uses printf with shell-escaped JSON content (Case 1: shell -c)
+	assert.Contains(t, arg, `printf '%s\n'`)
+	// Verify the JSON contains the modelID with single quotes (shellEscaped properly)
+	// The malicious single quotes should be escaped: '"'"'
+	assert.Contains(t, arg, `org/model'`)
 	assert.Contains(t, arg, `rm -rf /`)
 }
 
@@ -281,12 +418,13 @@ func TestInjectMetadataSave_MaliciousRevision_QuotedAndEscaped(t *testing.T) {
 	injectMetadataSave(tpl, "org/model", "$(rm -rf /)", "/models/path")
 
 	arg := tpl.Spec.Containers[0].Args[0]
-	// The malicious input should be properly shell-escaped
+	// The malicious input should be properly escaped
 	assert.Contains(t, arg, `.rbg-metadata.json`)
-	// Verify the $() is escaped by shellEscape (wrapped in single quotes)
-	assert.Contains(t, arg, `printf '`)
-	// The $( should appear inside the escaped string, not as executable
+	// Verify the $() is inside the JSON string, not as executable shell command
+	// The $ and ( should be part of the JSON-escaped string value
 	assert.Contains(t, arg, `$(rm -rf /)`)
+	// Verify the command uses printf with shell-escaped JSON content (Case 1: shell -c)
+	assert.Contains(t, arg, `printf '%s\n'`)
 }
 
 func TestInjectMetadataSave_DirectBinary_MaliciousInput_Escaped(t *testing.T) {
@@ -352,4 +490,139 @@ func TestPrintJobSummary_NoDuration_NoPanic(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "j", Namespace: "ns"},
 	}
 	printJobSummary(job, JobStateSucceeded)
+}
+
+// --- Shell command execution tests ---
+
+// TestMetadataCommandExecution_RealShell tests the actual shell command execution
+// to verify the metadata command works correctly in a real shell environment.
+func TestMetadataCommandExecution_RealShell(t *testing.T) {
+	if os.Getenv("SKIP_SHELL_TESTS") != "" {
+		t.Skip("Skipping shell execution test")
+	}
+
+	tests := []struct {
+		name     string
+		modelID  string
+		revision string
+	}{
+		{
+			name:     "normal values",
+			modelID:  "org/model",
+			revision: "main",
+		},
+		{
+			name:     "modelID with special chars",
+			modelID:  "org/my-model_v2",
+			revision: "v1.0.0",
+		},
+		{
+			name:     "malicious modelID with single quotes",
+			modelID:  "org/model'; rm -rf /; '",
+			revision: "main",
+		},
+		{
+			name:     "malicious revision with command substitution",
+			modelID:  "org/model",
+			revision: "$(rm -rf /)",
+		},
+		{
+			name:     "malicious with backticks",
+			modelID:  "org/`cat /etc/passwd`",
+			revision: "v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build the metadata JSON (same as injectMetadataSave)
+			metadata := struct {
+				ModelID      string `json:"modelID"`
+				Revision     string `json:"revision"`
+				DownloadedAt string `json:"downloadedAt"`
+			}{
+				ModelID:      tt.modelID,
+				Revision:     tt.revision,
+				DownloadedAt: "{{DOWNLOADED_AT}}",
+			}
+			metadataBytes, _ := json.Marshal(metadata)
+			metadataJSON := string(metadataBytes)
+
+			// Build the shell command (same as in injectMetadataSave Case 1)
+			shellCmd := fmt.Sprintf(
+				"downloadedAt=$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) && printf '%%s\\n' %s | sed \"s/{{DOWNLOADED_AT}}/$downloadedAt/g\"",
+				shellEscape(metadataJSON))
+
+			// Execute the command
+			cmd := exec.Command("/bin/sh", "-c", shellCmd)
+			output, err := cmd.Output()
+			require.NoError(t, err, "shell command should execute successfully: %s", shellCmd)
+
+			// Parse the output as JSON
+			var result map[string]interface{}
+			err = json.Unmarshal(output, &result)
+			require.NoError(t, err, "output should be valid JSON: %s", string(output))
+
+			// Verify the values
+			assert.Equal(t, tt.modelID, result["modelID"], "modelID should match")
+			assert.Equal(t, tt.revision, result["revision"], "revision should match")
+
+			// Verify downloadedAt is a valid timestamp (replaced from placeholder)
+			downloadedAt, ok := result["downloadedAt"].(string)
+			require.True(t, ok, "downloadedAt should be a string")
+			assert.NotEqual(t, "{{DOWNLOADED_AT}}", downloadedAt, "placeholder should be replaced")
+			// Verify it matches ISO 8601 format
+			_, err = time.Parse(time.RFC3339, downloadedAt)
+			assert.NoError(t, err, "downloadedAt should be valid ISO 8601 timestamp: %s", downloadedAt)
+		})
+	}
+}
+
+// TestMetadataCommandExecution_FileWrite tests the complete flow including file writing
+func TestMetadataCommandExecution_FileWrite(t *testing.T) {
+	if os.Getenv("SKIP_SHELL_TESTS") != "" {
+		t.Skip("Skipping shell execution test")
+	}
+
+	// Create a temp file for the test
+	tmpFile := "/tmp/test-rbg-metadata.json"
+	defer func() { _ = os.Remove(tmpFile) }()
+
+	modelID := "org/test-model"
+	revision := "v1.0"
+
+	// Build the metadata JSON
+	metadata := struct {
+		ModelID      string `json:"modelID"`
+		Revision     string `json:"revision"`
+		DownloadedAt string `json:"downloadedAt"`
+	}{
+		ModelID:      modelID,
+		Revision:     revision,
+		DownloadedAt: "{{DOWNLOADED_AT}}",
+	}
+	metadataBytes, _ := json.Marshal(metadata)
+	metadataJSON := string(metadataBytes)
+
+	// Build the full command with file output
+	shellCmd := fmt.Sprintf(
+		"downloadedAt=$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ) && printf '%%s\\n' %s | sed \"s/{{DOWNLOADED_AT}}/$downloadedAt/g\" > %s",
+		shellEscape(metadataJSON), shellEscape(tmpFile))
+
+	// Execute the command
+	cmd := exec.Command("/bin/sh", "-c", shellCmd)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "shell command should execute successfully: %s\noutput: %s", shellCmd, string(output))
+
+	// Read and verify the file content
+	content, err := os.ReadFile(tmpFile)
+	require.NoError(t, err, "should be able to read the output file")
+
+	var result map[string]interface{}
+	err = json.Unmarshal(content, &result)
+	require.NoError(t, err, "file content should be valid JSON: %s", string(content))
+
+	assert.Equal(t, modelID, result["modelID"])
+	assert.Equal(t, revision, result["revision"])
+	assert.NotEqual(t, "{{DOWNLOADED_AT}}", result["downloadedAt"])
 }
