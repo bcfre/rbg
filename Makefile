@@ -259,23 +259,27 @@ docker-push-benchmark: ${DOCKER_PUSH_BENCHMARK}
 PLATFORMS ?= linux/amd64,linux/arm64
 .PHONY: docker-buildx
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
-# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross if not already present
-	awk '/^FROM[[:space:]]+/ && !/^[[:space:]]*FROM[[:space:]]+--platform/ {sub(/^FROM/, "FROM --platform=$${BUILDPLATFORM}")} {print}' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name rbgs-builder
 	$(CONTAINER_TOOL) buildx use rbgs-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${RBG_CONTROLLER_IMG}:${TAG} $(DOCKER_BUILD_ARGS) -f Dockerfile.cross .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${RBG_CONTROLLER_IMG}:${TAG} $(DOCKER_BUILD_ARGS) -f Dockerfile .
 	- $(CONTAINER_TOOL) buildx rm rbgs-builder
-	rm Dockerfile.cross
 
 .PHONY: docker-buildx-push-crd-upgrader
 docker-buildx-push-crd-upgrader: ## Build and push CRD Upgrader image for cross-platform support
 	- $(CONTAINER_TOOL) buildx create --name rbgs-crd-builder
 	$(CONTAINER_TOOL) buildx use rbgs-crd-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${CRD_UPGRADER_IMG}:${TAG} $(DOCKER_BUILD_ARGS) -f ${CRD_UPGRADER_DOCKERFILE} .
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${CRD_UPGRADER_IMG}:${TAG} $(DOCKER_BUILD_ARGS) -f ${CRD_UPGRADER_DOCKERFILE} .
 	- $(CONTAINER_TOOL) buildx rm rbgs-crd-builder
 
+.PHONY: docker-buildx-push-patio
+docker-buildx-push-patio: ## Build and push patio image for cross-platform support
+	- $(CONTAINER_TOOL) buildx create --name rbgs-patio-builder
+	$(CONTAINER_TOOL) buildx use rbgs-patio-builder
+	$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${PATIO_IMG}:${TAG} $(DOCKER_BUILD_ARGS) -f ${PATIO_DOCKERFILE} .
+	- $(CONTAINER_TOOL) buildx rm rbgs-patio-builder
+
 .PHONY: docker-buildx-push
-docker-buildx-push: docker-buildx docker-buildx-push-crd-upgrader ## Build and push multi-arch controller and CRD upgrader images
+docker-buildx-push: docker-buildx docker-buildx-push-crd-upgrader docker-buildx-push-patio ## Build and push multi-arch controller, CRD upgrader, and patio images
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
